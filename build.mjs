@@ -4,8 +4,11 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkPrivacy } from "./check-private-data.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
+const privacy = checkPrivacy({ root });
+console.log(`Private-data preflight passed (${privacy.privateConfigPresent ? "local identifiers and generic patterns" : "generic patterns only"}).`);
 const dist = join(root, "web", "dist");
 const source = join(root, "web", "public");
 await mkdir(dist, { recursive: true });

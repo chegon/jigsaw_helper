@@ -50,11 +50,13 @@
 | [build.mjs](./build.mjs) / [serve.mjs](./serve.mjs) | 静态构建、打包和本地预览服务器 |
 | [app.py](./app.py) / [puzzle_helper.py](./puzzle_helper.py) / [demo.py](./demo.py) | 桌面界面、Python 识别实现及演示生成器 |
 | [deploy.ps1](./deploy.ps1) / [deploy-azure.ps1](./deploy-azure.ps1) | 推荐部署入口及其 Azure 实现，使用本机凭据发布 |
+| [check-private-data.mjs](./check-private-data.mjs) / [privacy.test.mjs](./privacy.test.mjs) | 发布前的本地隐私扫描及隔离测试 |
 | [web.test.mjs](./web.test.mjs) / [tests/](./tests/) | 静态版、桌面版和部署脚本测试 |
 | [package.json](./package.json) / [package-lock.json](./package-lock.json) | Node 命令和锁定的开发依赖 |
 | [requirements.txt](./requirements.txt) / [.streamlit/config.toml](./.streamlit/config.toml) | Python 依赖和可公开的本地服务设置 |
 | [access-key.example.yaml](./access-key.example.yaml) | 无真实凭据的 Azure 配置模板 |
 | [.gitignore](./.gitignore) | 本地凭据、依赖、生成文件与私人照片目录的排除规则 |
+| [AGENTS.md](./AGENTS.md) | 全仓库适用的基础设施信息隐私约束 |
 
 `web\dist`、`web\puzzle-iphone.zip`、`node_modules` 和 `.venv` 都是本地生成内容，不随 Git 仓库发布。刚克隆项目时缺少这些路径是正常的，应按下面的步骤安装和构建。
 
@@ -155,7 +157,7 @@ npm run build
 npm run preview
 ```
 
-已经克隆过时，从项目目录执行后三条命令即可。电脑打开 <http://127.0.0.1:8080>，终端按 `Ctrl+C` 停止预览。`npm ci` 按提交的锁文件还原依赖，`npm run build` 会检查主线程及 Worker 的 TypeScript，再打包可部署资源和开源许可；预览服务器不会自动重新构建，修改源码后需要再次构建并刷新页面。
+已经克隆过时，从项目目录执行后三条命令即可。电脑打开 <http://127.0.0.1:8080>，终端按 `Ctrl+C` 停止预览。`npm ci` 按提交的锁文件还原依赖，`npm run build` 会检查 TypeScript、运行隐私预检，再打包可部署资源和开源许可；预览服务器不会自动重新构建，修改源码后需要再次构建并刷新页面。
 
 同一 Wi-Fi 下临时用 iPhone 试用：
 
@@ -177,7 +179,7 @@ npm test
 
 推荐从项目根目录运行 [deploy.ps1](./deploy.ps1)，支持 Windows PowerShell 5.1 / PowerShell 7。它将所有参数、预览及确认行为转交给 [deploy-azure.ps1](./deploy-azure.ps1)，不会维护另一套上传逻辑；原脚本仍可直接使用。
 
-部署目标是**已经存在**的标准 GPv2 存储账户；启用分层命名空间的 ADLS Gen2 也支持静态网站。脚本不创建订阅、资源组或存储账户。需要 Azure CLI 和本机完整连接字符串，不需要先 `az login`：
+部署目标是**已经存在**的标准 GPv2 存储账户；启用分层命名空间的 ADLS Gen2 也支持静态网站。脚本不创建订阅、资源组或存储账户。需要 Azure CLI、Node.js、已通过 `npm ci` 安装的项目依赖，以及本机配置。即使上传已有构建，也要运行隐私预检，因此仍需要 Node.js；连接字符串认证不需要先 `az login`：
 
 ```powershell
 winget install --id Microsoft.AzureCLI -e
@@ -199,7 +201,9 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 Website URL: "https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/"
 ```
 
-支持这些平铺字段及其 `AccountName` / `ConnectionString` / `WebsiteUrl` 写法，不需要额外 YAML 模块。连接字符串必须使用 HTTPS，包含一致的 `AccountName` 和 `AccountKey`，以及标准 Azure 的 `EndpointSuffix`；不接受 SAS、自定义代理地址或模拟器连接字符串。旧的两字段配置仍可用，但只有填入 `Website URL` 或显式指定覆盖参数后才会验证公开网站。
+支持这些平铺字段及其 `AccountName` / `ConnectionString` / `WebsiteUrl` 写法，不需要额外 YAML 模块。三个字段都必须填写；旧的两字段配置需要补充 `Website URL`。连接字符串必须使用 HTTPS，包含一致的 `AccountName` 和 `AccountKey`，以及标准 Azure 的 `EndpointSuffix`；不接受 SAS、自定义代理地址或模拟器连接字符串。
+
+**实际账户名、连接字符串、网站 URL 和派生端点一律视为敏感信息。** 它们不是“公开标识就可以写进代码”的例外。部署命令不再接受 `-WebsiteUrl` 覆盖参数，必须修改被忽略的本机 YAML，避免真实地址进入命令历史。只允许通过 `-CredentialPath` 选择另一份私有 YAML 文件。
 
 可用的 `EndpointSuffix` 为 `core.windows.net`、`core.usgovcloudapi.net` 或 `core.chinacloudapi.cn`。不要将密钥放到脚本参数、环境示例、公开 Issue 或截图中；也不要把 `.yaml` 配置当作网站资源上传。
 
@@ -220,7 +224,7 @@ Website URL: "https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/"
 .\deploy.ps1 -Prefix '' -Build
 ```
 
-默认部署地址是 `Primary endpoint + jigsaw-helper/`。优先从本机配置的 `Website URL` 读取，显式传入 `-WebsiteUrl` 时覆盖配置。地址可以是 Primary endpoint 根地址，也可以是与 `-Prefix` 一致的应用目录；脚本会规范为带末尾 `/` 的地址，不会重复追加路径。更换 `-Prefix` 时也要更新本机 URL，或使用根地址以便自动追加前缀。若之前从网站根目录添加了主屏幕图标，请从新的子目录地址重新“添加到主屏幕”；新的安装入口和离线缓存只作用于这个子目录，默认不会删除原根目录副本。
+默认部署地址是 `Primary endpoint + jigsaw-helper/`，从本机配置的 `Website URL` 读取。地址可以是 Primary endpoint 根地址，也可以是与 `-Prefix` 一致的应用目录；脚本会规范为带末尾 `/` 的地址，不会重复追加路径。更换 `-Prefix` 时也要更新本机 URL，或使用根地址以便自动追加前缀。若之前从网站根目录添加了主屏幕图标，请从新的子目录地址重新“添加到主屏幕”；新的安装入口和离线缓存只作用于这个子目录，默认不会删除原根目录副本。
 
 一个账户提供一套静态网站入口和一个 `$web` 容器，但其中可以有多个独立的应用目录，例如 `jigsaw-helper/index.html` 和 `other-tool/index.html`。根目录可以作为导航页，各应用也能直接通过目录 URL 打开。它们共享域名和存储账户，目录不是登录权限、安全边界或费用隔离；需要这些隔离时，应使用不同账户或独立的 Static Web Apps。
 
@@ -230,7 +234,7 @@ Website URL: "https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/"
 .\deploy.ps1 -RetireRoot
 ```
 
-此选项会先发布并验证子目录，再删除固定清单中的 12 个旧根目录应用文件，使用 ETag 避免误删并发更新的内容，不删除整个容器、其他文件或目录。需要非空 `-Prefix`，以及本机配置或覆盖参数中的网站 URL；已有账户级首页回退配置时会停止，不会擅自修改它。
+此选项会先发布并验证子目录，再删除固定清单中的 12 个旧根目录应用文件，使用 ETag 避免误删并发更新的内容，不删除整个容器、其他文件或目录。需要非空 `-Prefix`，以及本机配置中的网站 URL；已有账户级首页回退配置时会停止，不会擅自修改它。
 
 根目录会保留一个很小的 `/sw.js` **维护脚本**，只用于清理旧版根目录 PWA 的缓存并注销旧 Service Worker，不再提供根目录应用。它不会清除 `/jigsaw-helper/` 的缓存。曾从根目录安装的 iPhone 图标建议删除，再从子目录添加；旧缓存需要联网完成一次更新，无法远程清除一台完全离线设备上的既有内容。
 
@@ -244,17 +248,18 @@ Website URL: "https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/"
 | `-SourcePath` | `web\dist`，必须已有完整静态构建 |
 | `-Prefix` | `jigsaw-helper`，可设多级目录；空字符串表示网站根目录 |
 | `-Build` | 上传前运行 `npm run build`；不自动安装依赖 |
-| `-WebsiteUrl` | 可选覆盖参数；默认读取本机配置的 `Website URL`，不会把实际地址写入源码 |
 | `-WhatIf` | 验证配置和文件并显示计划，不构建、不联网、不改变 Azure |
 | `-RetireRoot` | 显式清理旧根目录应用；先确认那 12 个同名文件不是其他网站的内容 |
 
 脚本会：
 
 - 启用静态网站，索引文档设为 `index.html`，保留已有自定义 404 文档；确保 `$web` 容器存在。
+- 修改 Azure 前先扫描当前源码、静态产物 / ZIP 和本地 Git 对象；发现配置中的真实标识、连接字符串、地址或编码形式会阻止部署。
 - **仅上传固定的 13 个应用资源到指定前缀**，默认是 `$web/jigsaw-helper/`；不递归上传项目或配置文件。默认不删除其他 blob，只有显式使用 `-RetireRoot` 才会清理固定清单中的旧根目录应用文件。指定目录内的同名文件会被覆盖，`-Prefix ''` 才会重新发布根目录应用。
 - 设置正确 MIME、`Cache-Control: no-cache`，启用传输内容校验，并逐个核对远端文件长度及 MIME / 缓存头。
 - 先上传运行资源，再上传首页，**最后上传 Service Worker**，减少新版离线缓存引用到未上传资源的机会。部署不是原子切换，更新期间可能短暂出现混合版本；iPhone 关闭旧页面后重新打开以完成离线更新。
-- 只在本次脚本进程的临时环境变量中提供连接字符串，不把密钥放到命令行、网页或输出中；无论成功或失败都会恢复原有环境变量。
+- 只在本次脚本进程的临时环境变量中向 Azure CLI 提供账户名和连接字符串，不把实际账户或密钥放进子进程命令行；无论成功或失败都会恢复原有环境变量。
+- 不在成功日志或返回对象中输出真实 URL；错误也会脱敏账户名、地址、派生主机及编码后的凭据，并关闭可能暴露请求 URL 的 HTTP 调试输出。
 
 公开资源的关键 MIME 为：HTML `text/html`、JavaScript（包括 `sw.js` 和 `opencv.js`）`application/javascript`、PWA 清单 `application/manifest+json`。使用脚本上传时会自动设置；手动上传时也必须正确，否则浏览器可能拒绝执行脚本或注册 Service Worker。
 
@@ -262,7 +267,7 @@ Website URL: "https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/"
 
 `access-key.yaml` / `access-key.yml` 已加入忽略列表。不要提交、分享或放入网站，密钥泄露后应在 Azure 轮换。账户若禁用了 Shared Key 认证或网络访问被防火墙阻止，脚本会明确失败，不会调整这些安全策略。静态网站公开只读，照片始终在 iPhone 本地处理。
 
-仅在本机配置与覆盖参数都没有网站 URL 时，脚本只验证 Blob 上传结果，不声称已验证公网可访问。准确域名需要从 Portal 的 **Static website → Primary endpoint** 复制到本机配置，不能从访问密钥可靠推断其中的 `zXX`。使用 HTTPS 静态网站地址，不要使用 `dfs` 或 `blob` 地址。最终地址只在部署者本机终端返回，不写进源码、构建资源或示例模板。
+准确域名需要从 Portal 的 **Static website → Primary endpoint** 复制到本机配置，不能从访问密钥可靠推断其中的 `zXX`。使用 HTTPS 静态网站地址，不要使用 `dfs` 或 `blob` 地址。缺少 URL 会在任何云端操作前失败；部署完成后请直接从本机配置读取最终地址，不从日志、返回对象、源码或模板读取。
 
 本地模拟测试（不使用真实凭据、不访问 Azure）：
 
@@ -328,6 +333,8 @@ py -m venv .venv
 
 ### 忽略规则与密钥保护
 
+字段名和占位符可以公开，但**实际值及其派生地址都属于敏感信息**。本规则覆盖源码、README、测试、配置副本、截图、日志、构建产物、压缩包及 Git 历史；不要将真实账户、连接字符串或 URL 用作测试样例或方便点击的仓库链接。
+
 [.gitignore](./.gitignore) 按用途分类，并在规则旁解释原因：
 
 | 类别 | 示例 | 原因 |
@@ -347,6 +354,9 @@ py -m venv .venv
 提交前可检查：
 
 ```powershell
+# 比对本机私有配置中的标识、地址、连接字符串及编码变体，并扫描 Git 对象和 ZIP
+npm run check:privacy
+
 # 第一条应显示命中的忽略规则，第二条应没有任何输出
 git check-ignore -v -- access-key.yaml
 git ls-files -- access-key.yaml access-key.yml
@@ -358,6 +368,10 @@ git status --short
 
 **`.gitignore` 不是密钥扫描器，也不会删除已经提交的文件或历史。** 如果曾经把真实密钥推送到任何仓库，优先到 Azure 轮换密钥；只新增忽略规则、删掉最新文件或把仓库改成私有都不能撤销泄露。
 
+隐私扫描发现问题时只报告安全位置，不打印匹配值。当前项目文件、已生成的静态目录 / ZIP 以及全部本地 Git 对象都会检查；依赖目录和本机虚拟环境不作为待发布源码扫描。测试目录也不能豁免本机真实配置的匹配，测试使用的纯合成 Azure URL 只豁免通用端点启发式规则。
+
+未提供本机私有配置的公开 CI / 新克隆仍可构建，但只能检查通用的账户端点、连接密钥和私钥模式；工具会明确提示这个限制，不能据此断言未知的真实账户名不存在。扫描也不能识别截图中文字、所有任意编码、加密数据或已在外部缓存的副本；这些仍需人工审核。
+
 删除远端仓库或更换 `origin` 也不会清理本地旧提交。重建仓库前应确认要推送的分支、标签和历史均不含真实账户名、连接字符串及最终 URL；不要把未清理的旧克隆或旧标签重新推回去。历史清理也无法撤回第三方已保存的公开副本。
 
 ## 开发与验证
@@ -365,7 +379,7 @@ git status --short
 静态版与桌面版的算法实现相互独立：修改一个版本不会自动更新另一个。改动识别逻辑时，至少覆盖对应版本的回归测试；只调整 Markdown 文档时无需重新部署应用。
 
 ```powershell
-# 静态版：先检查 TypeScript 并构建，再运行 Node 测试
+# 静态版：检查 TypeScript 和隐私、构建，再运行匹配及隐私回归测试
 npm test
 
 # Azure 脚本：隔离模拟，不读取真实凭据，也不请求 Azure
@@ -387,6 +401,7 @@ npm test
 - 缺片空洞、互补轮廓、已拼区域对齐失败、跨照片数量限制和资源独立性。
 - PWA 子目录路径、离线资源范围、旧根目录 Worker 退役及静态资源打包。
 - Azure 预览、MIME / 缓存头、凭据输出脱敏、环境变量恢复、前缀隔离和受控删除。
+- 隐私扫描对真实配置值、派生主机、编码变体、压缩包和历史对象的拦截，以及部署输出和参数不携带实际值。
 
 自动测试通过并不等于已在所有 iPhone 上验证。Safari 内存、HEIC 解码、系统分享面板和真实照片的识别表现仍需真机测试。运行匹配测试不会修改线上 Azure 网站；只有显式执行部署脚本才会发布。
 
@@ -407,6 +422,7 @@ npm test
 | 模板候选分数很高却不正确 | 分数不是概率；重复或渐变图案可能有多处高分，请切换备选并实际核对 |
 | 线上仍显示旧界面 | 联网关闭所有旧标签页 / 主屏幕实例后重开；必要时清除该站点缓存，但要先导出未保存结果 |
 | Azure 返回 403 | 检查账户是否允许 Shared Key、网络防火墙、连接字符串及账户名；脚本不会自动关闭这些保护 |
+| 隐私预检阻止构建或部署 | 按工具给出的安全位置清理真实标识；不要为了通过检查而删除本机配置、跳过扫描或仅移除最新文件而保留旧历史 |
 | Azure 子目录返回 404 或脚本无法加载 | 确认上传了完整构建、路径大小写和 MIME 正确，且访问的是 HTTPS `web` Primary endpoint |
 | Azure 根目录返回 404 | 当前部署的预期行为，请使用 `/jigsaw-helper/`；`/sw.js` 只保留旧缓存退役用途 |
 

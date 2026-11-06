@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "tsc --noEmit && tsc --project tsconfig.worker.json && node build.mjs",
-    "test": "npm run build && node --test web.test.mjs",
+    "test": "npm run build && node --test web.test.mjs privacy.test.mjs",
+    "check:privacy": "node check-private-data.mjs",
     "preview": "node serve.mjs",
     "preview:lan": "node serve.mjs --lan"
   },

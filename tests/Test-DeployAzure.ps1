@@ -27,6 +27,8 @@ $script:mock = [pscustomobject]@{
     InvalidWebsiteLength = $false
     FailBuild = $false
     BuildCalls = 0
+    PrivacyChecks = 0
+    FailPrivacy = $false
     RootDeleted = [System.Collections.Generic.List[string]]::new()
     RootWorkerUploaded = $false
     RootMissing = $false
@@ -52,6 +54,8 @@ function az {
     $state = $global:JigsawDeploymentMock
     $arguments = @($args)
     $state.Calls.Add($arguments)
+    Assert-Test ($state.PrivacyChecks -gt 0) 'Azure was contacted before the private-data scan.'
+    Assert-Test (-not ($arguments -contains '--account-name')) 'Account identifiers must not appear in command arguments.'
     Assert-Test (-not (($arguments -join ' ') -match [regex]::Escape($state.Key))) 'Key appeared in process arguments.'
     Assert-Test (-not ($arguments -contains '--connection-string')) 'Connection string must use the environment, not arguments.'
     Assert-Test ($env:AZURE_STORAGE_CONNECTION_STRING -ceq $state.Connection) 'Temporary connection-string environment was not provided.'
@@ -134,14 +138,25 @@ function npm {
     $global:LASTEXITCODE = if ($state.FailBuild) { 1 } else { 0 }
 }
 
+function node {
+    $state = $global:JigsawDeploymentMock
+    Assert-Test ([string] $args[0] -like '*check-private-data.mjs') 'Unexpected Node command.'
+    Assert-Test ($args -contains '--credentials' -and $args -contains '--source') 'Private-data scan arguments were incomplete.'
+    Assert-Test (-not (($args -join ' ').Contains($state.Key))) 'Private values appeared in scanner arguments.'
+    $state.PrivacyChecks++
+    $global:LASTEXITCODE = if ($state.FailPrivacy) { 1 } else { 0 }
+}
+
 function Invoke-WebRequest {
     param(
         [uri] $Uri, [string] $Method, [switch] $UseBasicParsing,
-        [int] $MaximumRedirection, [int] $TimeoutSec, [string] $ErrorAction
+        [int] $MaximumRedirection, [int] $TimeoutSec, [string] $ErrorAction,
+        [switch] $Verbose, [switch] $Debug
     )
     $state = $global:JigsawDeploymentMock
     $state.WebCalls.Add($Uri.AbsoluteUri)
     Assert-Test ($Method -eq 'Head' -and $Uri.Scheme -eq 'https') 'Website verification must be HTTPS HEAD.'
+    Assert-Test (-not $Verbose.IsPresent -and -not $Debug.IsPresent) 'HTTP diagnostics could expose a real URL.'
     if ($state.FailWebsite) { throw [System.Net.WebException]::new('Simulated website connection failure.') }
     $name = $Uri.AbsolutePath.TrimStart('/')
     if ($state.RootWorkerUploaded -and (-not $name -or $state.RootDeleted.Contains($name) -or $state.RootMissing)) {
@@ -173,6 +188,8 @@ function Reset-Mocks {
     $script:mock.InvalidWebsiteLength = $false
     $script:mock.FailBuild = $false
     $script:mock.BuildCalls = 0
+    $script:mock.PrivacyChecks = 0
+    $script:mock.FailPrivacy = $false
     $script:mock.RootDeleted.Clear()
     $script:mock.RootWorkerUploaded = $false
     $script:mock.RootMissing = $false
@@ -182,7 +199,14 @@ function Reset-Mocks {
 }
 
 function Write-Credentials {
-    param([string] $Text = "Storage account name: testjigsaw123`nConnection string: `"$script:connection`"")
+    param(
+        [string] $Text = "Storage account name: testjigsaw123`nConnection string: `"$script:connection`"",
+        [string] $Site = 'https://testjigsaw123.z1.web.core.windows.net/',
+        [switch] $OmitWebsiteUrl
+    )
+    if (-not $OmitWebsiteUrl -and $Text -notmatch '(?mi)^\s*[''"]?Website[ _-]*URL[''"]?\s*:') {
+        $Text += "`nWebsite URL: `"$Site`""
+    }
     [System.IO.File]::WriteAllText($credentialFile, $Text)
 }
 
@@ -243,14 +267,14 @@ try {
         Assert-Test ($script:calls.Count -eq 0 -and $script:webCalls.Count -eq 0 -and $script:mock.BuildCalls -eq 0) 'The deployment entry lost WhatIf.'
     }
     Run-Test 'The deploy.ps1 entry forwards explicit root and build options' {
-        $result = & $deploymentEntry @common -Build -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        $result = & $deploymentEntry @common -Build
         Assert-Test ($result.Prefix -eq '' -and $result.FilesUploaded -eq 13 -and $result.WebsiteVerified) 'The entry changed explicit deployment parameters.'
         Assert-Test ($script:mock.BuildCalls -eq 1) 'The entry did not forward Build exactly once.'
     }
     Run-Test 'The deploy.ps1 entry preserves the subdirectory default and root retirement' {
         $parameters = $common.Clone()
         $parameters.Remove('Prefix')
-        $result = & $deploymentEntry @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        $result = & $deploymentEntry @parameters -RetireRoot
         Assert-Test ($result.Prefix -eq 'jigsaw-helper' -and $result.RootRetired -and $result.RootFilesRemoved -eq 12) 'The entry did not preserve retirement options or defaults.'
     }
     Run-Test 'The deploy.ps1 entry propagates deployment failures' {
@@ -264,7 +288,7 @@ try {
         $site = 'https://testjigsaw123.z1.web.core.windows.net/jigsaw-helper/'
         Write-Credentials "Storage account name: testjigsaw123`nConnection string: `"$script:connection`"`nWebsite URL: `"$site`""
         $result = & $deploymentEntry @parameters
-        Assert-Test ($result.WebsiteVerified -and $result.WebsiteUrl -eq $site) 'The local final URL was not used.'
+        Assert-Test ($result.WebsiteVerified -and -not $result.PSObject.Properties['WebsiteUrl']) 'Private URL was exposed in deployment output.'
         Assert-Test ($script:webCalls.Count -eq 13) 'The configured public site was not verified.'
         Assert-Test (@($script:webCalls | Where-Object { -not $_.StartsWith($site) }).Count -eq 0) 'Website checks did not use the private configured URL.'
     }
@@ -273,14 +297,14 @@ try {
         $parameters.Prefix = 'tools/jigsaw-helper'
         Write-Credentials "AccountName: testjigsaw123`nConnectionString: $script:connection`nWebsite_URL: 'https://testjigsaw123.z1.web.core.windows.net/' # placeholder test endpoint"
         $result = & $deploymentScript @parameters
-        Assert-Test ($result.WebsiteUrl -eq 'https://testjigsaw123.z1.web.core.windows.net/tools/jigsaw-helper/') 'Configured URL alias or prefix normalization failed.'
+        Assert-Test ($script:webCalls[0] -eq 'https://testjigsaw123.z1.web.core.windows.net/tools/jigsaw-helper/opencv.js') 'Configured URL alias or prefix normalization failed.'
         Assert-Test ($result.WebsiteVerified) 'Configured Primary endpoint was not verified.'
     }
-    Run-Test 'An explicit WebsiteUrl overrides the private configured final URL' {
-        Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: https://private.example.test/jigsaw-helper/"
-        $result = & $deploymentEntry @common -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
-        Assert-Test ($result.WebsiteUrl -eq 'https://testjigsaw123.z1.web.core.windows.net/') 'Explicit URL did not override the local config.'
-        Assert-Test (@($script:webCalls | Where-Object { $_ -like '*private.example.test*' }).Count -eq 0) 'The overridden private URL was still requested.'
+    Run-Test 'Infrastructure URL overrides are not accepted on either command entrypoint' {
+        foreach ($scriptPath in @($deploymentEntry, $deploymentScript)) {
+            $command = Get-Command $scriptPath
+            Assert-Test (-not $command.Parameters.ContainsKey('WebsiteUrl')) 'A private URL override is still exposed.'
+        }
     }
     Run-Test 'A configured URL is sufficient for explicit root retirement' {
         $parameters = $common.Clone()
@@ -323,12 +347,13 @@ try {
         $site = 'https://private.example.test/jigsaw-helper/'
         Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: $site"
         $script:mock.FailUpload = 'jigsaw-helper/worker.js'
-        $script:mock.ErrorContext = 'Account TESTJIGSAW123 and URL ' + $site.ToUpperInvariant()
-        Expect-Failure { & $deploymentEntry @parameters } 'Azure CLI failed' @('testjigsaw123', $site)
+        $script:mock.ErrorContext = 'Account TESTJIGSAW123 and URL ' + $site.ToUpperInvariant() +
+            ' host PRIVATE.EXAMPLE.TEST and encoded key ' + [uri]::EscapeDataString($script:key)
+        Expect-Failure { & $deploymentEntry @parameters } 'Azure CLI failed' @('testjigsaw123', $site, 'private.example.test', [uri]::EscapeDataString($script:key))
     }
     Run-Test 'Exact allowlist, MIME, verification, upload order and environment restoration' {
         $result = & $deploymentScript @common
-        Assert-Test ($result.FilesUploaded -eq 13 -and $result.BlobMetadataVerified -and -not $result.WebsiteVerified) 'Incorrect deployment result.'
+        Assert-Test ($result.FilesUploaded -eq 13 -and $result.BlobMetadataVerified -and $result.WebsiteVerified) 'Incorrect deployment result.'
         $uploads = @($script:calls | Where-Object { $_[0..2] -join ' ' -eq 'storage blob upload' })
         Assert-Test ($uploads.Count -eq 13) 'Unexpected upload count.'
         Assert-Test ((Get-TestArgument $uploads[-1] '--name') -eq 'sw.js') 'Service Worker was not last.'
@@ -344,16 +369,16 @@ try {
             Assert-Test ([Environment]::GetEnvironmentVariable($name, 'Process') -ceq $sentinels[$name]) 'Environment was not restored.'
         }
     }
-    Run-Test 'Optional public URL is verified for every asset without passing auth arguments' {
-        $result = & $deploymentScript @common -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+    Run-Test 'Configured public URL is verified for every asset without passing auth arguments' {
+        $result = & $deploymentScript @common
         Assert-Test ($result.WebsiteVerified -and $script:webCalls.Count -eq 13) 'Public website was not verified.'
     }
     Run-Test 'Default deployment uses jigsaw-helper and never writes root blobs' {
         $parameters = $common.Clone()
         $parameters.Remove('Prefix')
-        $result = & $deploymentScript @parameters -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        $result = & $deploymentScript @parameters
         Assert-Test ($result.Prefix -eq 'jigsaw-helper') 'Default prefix was not applied.'
-        Assert-Test ($result.WebsiteUrl -eq 'https://testjigsaw123.z1.web.core.windows.net/jigsaw-helper/') 'Prefix was not added to the Primary endpoint.'
+        Assert-Test ($script:webCalls[0] -eq 'https://testjigsaw123.z1.web.core.windows.net/jigsaw-helper/opencv.js') 'Prefix was not added to the configured endpoint.'
         $uploads = @($script:calls | Where-Object { $_[0..2] -join ' ' -eq 'storage blob upload' })
         $checks = @($script:calls | Where-Object { $_[0..2] -join ' ' -eq 'storage blob show' })
         Assert-Test ($uploads.Count -eq 13 -and $checks.Count -eq 13) 'Prefixed upload verification was incomplete.'
@@ -367,9 +392,10 @@ try {
     Run-Test 'Nested prefixes and an already-prefixed public URL are normalized once' {
         $parameters = $common.Clone()
         $parameters.Prefix = '/tools/jigsaw-helper/'
-        $result = & $deploymentScript @parameters -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/tools/jigsaw-helper'
+        Write-Credentials -Site 'https://testjigsaw123.z1.web.core.windows.net/tools/jigsaw-helper'
+        $result = & $deploymentScript @parameters
         Assert-Test ($result.Prefix -eq 'tools/jigsaw-helper') 'Nested prefix was not normalized.'
-        Assert-Test ($result.WebsiteUrl -eq 'https://testjigsaw123.z1.web.core.windows.net/tools/jigsaw-helper/') 'Prefix was duplicated or directory slash was lost.'
+        Assert-Test ($script:webCalls[0] -eq 'https://testjigsaw123.z1.web.core.windows.net/tools/jigsaw-helper/opencv.js') 'Prefix was duplicated or directory slash was lost.'
         Assert-Test ($script:webCalls.Count -eq 13) 'Nested public website checks were incomplete.'
     }
     Run-Test 'Unsafe prefixes fail locally without accessing Azure' {
@@ -383,13 +409,14 @@ try {
     Run-Test 'Public URL path must match the prefix before any Azure changes' {
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
-        Expect-Failure { & $deploymentScript @parameters -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/other/' } 'directory matching -Prefix'
+        Write-Credentials -Site 'https://testjigsaw123.z1.web.core.windows.net/other/'
+        Expect-Failure { & $deploymentScript @parameters } 'directory matching -Prefix'
         Assert-Test ($script:calls.Count -eq 0) 'Azure changed before a mismatched URL was rejected.'
     }
     Run-Test 'Root retirement deletes only the named root app files after verifying the subdirectory' {
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
-        $result = & $deploymentScript @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        $result = & $deploymentScript @parameters -RetireRoot
         Assert-Test ($result.RootRetired -and $result.RootFilesRemoved -eq 12 -and $result.FilesUploaded -eq 14) 'Root retirement result was incorrect.'
         $expected = @($assetNames | Where-Object { $_ -ne 'sw.js' } | Sort-Object)
         Assert-Test (($script:mock.RootDeleted | Sort-Object) -join ',' -eq ($expected -join ',')) 'Deletion escaped the root application allowlist.'
@@ -403,21 +430,22 @@ try {
     Run-Test 'Root retirement preview performs no uploads or deletions' {
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
-        & $deploymentScript @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/' -WhatIf | Out-Null
+        & $deploymentScript @parameters -RetireRoot -WhatIf | Out-Null
         Assert-Test ($script:calls.Count -eq 0 -and $script:webCalls.Count -eq 0) 'Root retirement preview changed Azure.'
     }
     Run-Test 'Root retirement rejects root deployments or missing public verification URLs' {
-        Expect-Failure { & $deploymentScript @common -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/' } 'nonempty -Prefix'
+        Expect-Failure { & $deploymentScript @common -RetireRoot } 'nonempty -Prefix'
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
-        Expect-Failure { & $deploymentScript @parameters -RetireRoot } 'nonempty -Prefix'
+        Write-Credentials -OmitWebsiteUrl
+        Expect-Failure { & $deploymentScript @parameters -RetireRoot } 'Website URL'
         Assert-Test ($script:calls.Count -eq 0) 'Unsafe retirement changed Azure.'
     }
     Run-Test 'Root retirement is repeatable when the old root files are already missing' {
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
         $script:mock.RootMissing = $true
-        $result = & $deploymentScript @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        $result = & $deploymentScript @parameters -RetireRoot
         Assert-Test ($result.RootRetired -and $result.RootFilesRemoved -eq 0) 'Already-missing root files caused an incorrect result.'
         Assert-Test ($script:mock.RootDeleted.Count -eq 0) 'Missing files were deleted.'
     }
@@ -425,20 +453,20 @@ try {
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
         $script:mock.FailRootDelete = $true
-        Expect-Failure { & $deploymentScript @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/' } 'Azure CLI failed'
+        Expect-Failure { & $deploymentScript @parameters -RetireRoot } 'Azure CLI failed'
         Assert-Test ($script:mock.RootDeleted.Count -eq 0) 'Retirement continued after a delete failure.'
     }
     Run-Test 'A still-public root fails the required HTTP 404 verification' {
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
         $script:mock.RootStillPublic = $true
-        Expect-Failure { & $deploymentScript @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/' } 'Expected HTTP 404'
+        Expect-Failure { & $deploymentScript @parameters -RetireRoot } 'Expected HTTP 404'
     }
     Run-Test 'An account-wide index fallback is not silently changed for root retirement' {
         $parameters = $common.Clone()
         $parameters.Prefix = 'jigsaw-helper'
         $script:mock.DefaultIndexFallback = $true
-        Expect-Failure { & $deploymentScript @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/' } 'default index-document fallback'
+        Expect-Failure { & $deploymentScript @parameters -RetireRoot } 'default index-document fallback'
         Assert-Test ($script:calls.Count -eq 1) 'Unrelated static settings were modified.'
     }
     Run-Test 'Build runs exactly once before Azure operations' {
@@ -468,11 +496,11 @@ try {
     }
     Run-Test 'Public endpoint failures are not reported as successful deployment' {
         $script:mock.FailWebsite = $true
-        Expect-Failure { & $deploymentScript @common -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/' } 'Public website check failed'
+        Expect-Failure { & $deploymentScript @common } 'Public website check failed'
     }
     Run-Test 'Malformed public Content-Length fails verification instead of casting or defaulting' {
         $script:mock.InvalidWebsiteLength = $true
-        Expect-Failure { & $deploymentScript @common -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/' } 'Public website content verification failed'
+        Expect-Failure { & $deploymentScript @common } 'Public website content verification failed'
     }
     Run-Test 'Account mismatches fail before Azure is contacted' {
         Write-Credentials "Storage account name: anotheraccount`nConnection string: $script:connection"
@@ -509,9 +537,25 @@ try {
     }
     Run-Test 'Insecure or credential-bearing website URLs fail locally' {
         foreach ($url in @('http://example.test/', 'https://user:password@example.test/', 'https://example.test/?sig=anything')) {
-            Expect-Failure { & $deploymentScript @common -WebsiteUrl $url } 'must be the HTTPS'
+            Write-Credentials -Site $url
+            Expect-Failure { & $deploymentScript @common } 'must be HTTPS' @($url)
         }
         Assert-Test ($script:calls.Count -eq 0) 'Invalid website URL reached Azure.'
+    }
+    Run-Test 'Private-data preflight failures prevent every Azure operation' {
+        $script:mock.FailPrivacy = $true
+        Expect-Failure { & $deploymentEntry @common } 'Private-data preflight failed'
+        Assert-Test ($script:mock.PrivacyChecks -eq 1 -and $script:calls.Count -eq 0) 'Cloud operations ran after a private-data failure.'
+    }
+    Run-Test 'Success summaries and verbose output contain no infrastructure identifiers' {
+        $records = @(& $deploymentEntry @common -Verbose 6>&1 4>&1)
+        $text = ($records | ForEach-Object { $_.ToString() }) -join "`n"
+        foreach ($value in @('testjigsaw123', $script:connection, $script:key, 'https://testjigsaw123.z1.web.core.windows.net/')) {
+            Assert-Test ($text -notmatch [regex]::Escape($value)) 'A success message exposed private configuration.'
+        }
+        $result = @($records | Where-Object { $_.PSObject.Properties['FilesUploaded'] })[0]
+        Assert-Test (-not $result.PSObject.Properties['WebsiteUrl']) 'The return object exposed the private URL.'
+        Assert-Test ($script:mock.PrivacyChecks -eq 1) 'The mandatory privacy check did not run.'
     }
     Write-Host ("All {0} deployment tests passed. No requests were made to Azure." -f $script:testCount)
 } finally {

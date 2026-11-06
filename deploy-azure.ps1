@@ -3,14 +3,14 @@
 .SYNOPSIS
 Deploy the static iPhone application to an existing Azure Storage account.
 .DESCRIPTION
-Reads the account name, connection string, and optional final Website URL from
-the ignored access-key.yaml file. -WebsiteUrl overrides the configured URL.
+Reads the account name, connection string, and final Website URL exclusively
+from the ignored local YAML configuration. Private values are not printed.
 .EXAMPLE
 .\deploy-azure.ps1 -WhatIf
 .EXAMPLE
 .\deploy-azure.ps1 -Build
 .EXAMPLE
-.\deploy-azure.ps1 -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy-azure.ps1 -CredentialPath '.\access-key.yaml'
 .EXAMPLE
 .\deploy-azure.ps1 -Prefix 'tools/jigsaw-helper' -Build
 .EXAMPLE
@@ -25,8 +25,7 @@ param(
     [AllowEmptyString()]
     [string] $Prefix = 'jigsaw-helper',
     [switch] $Build,
-    [switch] $RetireRoot,
-    [uri] $WebsiteUrl
+    [switch] $RetireRoot
 )
 
 Set-StrictMode -Version Latest
@@ -105,11 +104,14 @@ function Read-DeploymentCredentials {
             throw 'Use a standard Azure connection string without custom endpoints, proxy destinations, or SAS fields.'
         }
     }
+    if (-not $values.ContainsKey('WebsiteUrl') -or -not $values['WebsiteUrl']) {
+        throw 'The private configuration needs a Website URL. Its value must not be supplied on the command line.'
+    }
     return [pscustomobject]@{
         AccountName = $values['AccountName']
         AccountKey = $parts['AccountKey']
         ConnectionString = $values['ConnectionString']
-        WebsiteUrl = if ($values.ContainsKey('WebsiteUrl')) { $values['WebsiteUrl'] } else { $null }
+        WebsiteUrl = $values['WebsiteUrl']
     }
 }
 
@@ -117,12 +119,16 @@ function Protect-DeploymentMessage {
     param([string] $Text)
 
     $safe = $Text
+    $site = [uri] $script:credentials.WebsiteUrl
     foreach ($value in @(
         $script:credentials.ConnectionString, $script:credentials.AccountKey,
-        $script:credentials.WebsiteUrl, $script:credentials.AccountName
+        $script:credentials.WebsiteUrl, $site.GetLeftPart([System.UriPartial]::Authority),
+        $site.Host, $script:credentials.AccountName
     )) {
         if ($value) {
-            $safe = [regex]::Replace($safe, [regex]::Escape($value), '[REDACTED]', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            foreach ($variant in @($value, [uri]::EscapeDataString($value))) {
+                $safe = [regex]::Replace($safe, [regex]::Escape($variant), '[REDACTED]', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            }
         }
     }
     return ($safe -replace '(?i)(AccountKey|SharedAccessSignature|sig)\s*=\s*[^;\s"'']+', '$1=[REDACTED]')
@@ -177,16 +183,13 @@ $blobPrefix = $Prefix.Trim('/')
 if ($blobPrefix -and $blobPrefix -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]*(/[A-Za-z0-9][A-Za-z0-9_-]*)*$') {
     throw '-Prefix must contain directory names separated by /, using letters, digits, hyphens, or underscores. Use an empty string for the website root.'
 }
-$script:credentials = Read-DeploymentCredentials -Path $CredentialPath
-if (-not $PSBoundParameters.ContainsKey('WebsiteUrl') -and $script:credentials.WebsiteUrl) {
-    [uri] $configuredUrl = $null
-    if (-not [uri]::TryCreate($script:credentials.WebsiteUrl, [System.UriKind]::Absolute, [ref] $configuredUrl)) {
-        throw 'Configured Website URL is invalid. Its value has not been displayed.'
-    }
-    $WebsiteUrl = $configuredUrl
+if ($RetireRoot -and -not $blobPrefix) {
+    throw '-RetireRoot requires a nonempty -Prefix.'
 }
-if ($RetireRoot -and (-not $blobPrefix -or -not $WebsiteUrl)) {
-    throw '-RetireRoot requires a nonempty -Prefix and Website URL in the local config or -WebsiteUrl so the subdirectory can be verified before root files are removed.'
+$script:credentials = Read-DeploymentCredentials -Path $CredentialPath
+[uri] $WebsiteUrl = $null
+if (-not [uri]::TryCreate($script:credentials.WebsiteUrl, [System.UriKind]::Absolute, [ref] $WebsiteUrl)) {
+    throw 'Configured Website URL is invalid. Its value has not been displayed.'
 }
 $retirementWorker = Join-Path $PSScriptRoot 'web\retire-root-sw.js'
 if ($RetireRoot -and (-not (Test-Path -LiteralPath $retirementWorker -PathType Leaf) -or
@@ -197,11 +200,11 @@ $deploymentUrl = $null
 if ($WebsiteUrl) {
     if (-not $WebsiteUrl.IsAbsoluteUri -or $WebsiteUrl.Scheme -ne 'https' -or
         $WebsiteUrl.UserInfo -or $WebsiteUrl.Query -or $WebsiteUrl.Fragment) {
-        throw '-WebsiteUrl must be the HTTPS static website URL, without credentials, query, or fragment.'
+        throw 'Configured Website URL must be HTTPS, without embedded credentials, query, or fragment.'
     }
     $providedPath = $WebsiteUrl.AbsolutePath.Trim('/')
     if ($providedPath -and $providedPath -cne $blobPrefix) {
-        throw '-WebsiteUrl must be the Primary endpoint root or the directory matching -Prefix.'
+        throw 'Configured Website URL must be the Primary endpoint root or the directory matching -Prefix.'
     }
     $deploymentPath = if ($blobPrefix) { '/' + $blobPrefix + '/' } else { '/' }
     $deploymentUrl = [uri] ($WebsiteUrl.GetLeftPart([System.UriPartial]::Authority) + $deploymentPath)
@@ -265,6 +268,12 @@ if (-not $PSCmdlet.ShouldProcess($target, $operation)) {
     return
 }
 
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    throw 'Node.js and npm ci are required for the mandatory private-data preflight.'
+}
+& node (Join-Path $PSScriptRoot 'check-private-data.mjs') --credentials (Resolve-Path -LiteralPath $CredentialPath).Path --source $sourceDirectory
+if ($LASTEXITCODE -ne 0) { throw 'Private-data preflight failed. No Azure operations were performed.' }
+
 $script:azCommand = Get-Command az -ErrorAction SilentlyContinue
 if (-not $script:azCommand) {
     throw 'Azure CLI is required. Install it with: winget install --id Microsoft.AzureCLI -e'
@@ -283,7 +292,7 @@ try {
         $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         [Environment]::SetEnvironmentVariable($name, $environment[$name], 'Process')
     }
-    $accountArgs = @('--account-name', $script:credentials.AccountName, '--auth-mode', 'key')
+    $accountArgs = @('--auth-mode', 'key')
     $existing = Invoke-DeploymentAz -Arguments (@('storage', 'blob', 'service-properties', 'show') + $accountArgs) `
         -Operation 'reading static website settings' -Json
     if ($RetireRoot -and $existing.PSObject.Properties['staticWebsite'] -and $existing.staticWebsite -and
@@ -317,7 +326,7 @@ try {
             for ($attempt = 1; $attempt -le 5; $attempt++) {
                 try {
                     $response = Invoke-WebRequest -Uri $url -Method Head -UseBasicParsing `
-                        -MaximumRedirection 0 -TimeoutSec 30 -ErrorAction Stop
+                        -MaximumRedirection 0 -TimeoutSec 30 -Verbose:$false -Debug:$false -ErrorAction Stop
                     break
                 } catch {
                     $status = 0
@@ -338,11 +347,11 @@ try {
             }
         }
         $websiteVerified = $true
-        Write-Host ('Website verified: {0}' -f $deploymentUrl.AbsoluteUri)
+        Write-Host 'Public website verified using the private configuration; URL withheld.'
     } else {
         Write-Host 'Assets uploaded and verified in Blob Storage. The public website URL was not checked.'
         Write-Host 'Find Primary endpoint in Azure Portal > Storage account > Static website.'
-        Write-Host 'Set Website URL in the ignored access-key.yaml, or pass -WebsiteUrl explicitly; -Prefix is appended automatically.'
+        Write-Host 'Review Website URL in the ignored private configuration.'
     }
 
     $rootFilesRemoved = 0
@@ -367,7 +376,7 @@ try {
             $status = 0
             try {
                 $response = Invoke-WebRequest -Uri ($rootUrl + $name) -Method Head -UseBasicParsing `
-                    -MaximumRedirection 0 -TimeoutSec 30 -ErrorAction Stop
+                    -MaximumRedirection 0 -TimeoutSec 30 -Verbose:$false -Debug:$false -ErrorAction Stop
                 $status = [int] $response.StatusCode
             } catch {
                 if ($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response) {
@@ -385,7 +394,7 @@ try {
         Prefix = $blobPrefix
         BlobMetadataVerified = $true
         WebsiteVerified = $websiteVerified
-        WebsiteUrl = if ($deploymentUrl) { $deploymentUrl.AbsoluteUri } else { $null }
+        WebsiteSource = 'private configuration'
         RootRetired = [bool] $RetireRoot
         RootFilesRemoved = $rootFilesRemoved
     }

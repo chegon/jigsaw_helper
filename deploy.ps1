@@ -22,8 +22,7 @@ param(
     [AllowEmptyString()]
     [string] $Prefix = 'jigsaw-helper',
     [switch] $Build,
-    [switch] $RetireRoot,
-    [uri] $WebsiteUrl
+    [switch] $RetireRoot
 )
 
 Set-StrictMode -Version Latest
