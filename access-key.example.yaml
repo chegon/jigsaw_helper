@@ -1,0 +1,6 @@
+# Copy this template to access-key.yaml only if that local file does not exist.
+# Replace both placeholders using the Azure Portal account access-keys page.
+# Use the full HTTPS connection string with AccountName, AccountKey, and
+# EndpointSuffix. Never put a real credential in this example or commit it.
+Storage account name: YOUR_STORAGE_ACCOUNT
+Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"

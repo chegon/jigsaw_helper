@@ -3,6 +3,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $deploymentScript = Join-Path (Split-Path $PSScriptRoot -Parent) 'deploy-azure.ps1'
+$deploymentEntry = Join-Path (Split-Path $PSScriptRoot -Parent) 'deploy.ps1'
 $fixtureRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('jigsaw-deploy-test-' + [guid]::NewGuid().ToString('N'))
 $source = Join-Path $fixtureRoot 'dist'
 $credentialFile = Join-Path $fixtureRoot 'fake-credentials.yaml'
@@ -231,6 +232,26 @@ try {
     Run-Test 'WhatIf checks inputs but performs no build, CLI call, or HTTP request' {
         & $deploymentScript @common -WhatIf -Build | Out-Null
         Assert-Test ($script:calls.Count -eq 0 -and $script:webCalls.Count -eq 0 -and $script:mock.BuildCalls -eq 0) 'WhatIf caused side effects.'
+    }
+    Run-Test 'The deploy.ps1 entry forwards WhatIf and Build without causing side effects' {
+        & $deploymentEntry @common -WhatIf -Build | Out-Null
+        Assert-Test ($script:calls.Count -eq 0 -and $script:webCalls.Count -eq 0 -and $script:mock.BuildCalls -eq 0) 'The deployment entry lost WhatIf.'
+    }
+    Run-Test 'The deploy.ps1 entry forwards explicit root and build options' {
+        $result = & $deploymentEntry @common -Build -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        Assert-Test ($result.Prefix -eq '' -and $result.FilesUploaded -eq 13 -and $result.WebsiteVerified) 'The entry changed explicit deployment parameters.'
+        Assert-Test ($script:mock.BuildCalls -eq 1) 'The entry did not forward Build exactly once.'
+    }
+    Run-Test 'The deploy.ps1 entry preserves the subdirectory default and root retirement' {
+        $parameters = $common.Clone()
+        $parameters.Remove('Prefix')
+        $result = & $deploymentEntry @parameters -RetireRoot -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        Assert-Test ($result.Prefix -eq 'jigsaw-helper' -and $result.RootRetired -and $result.RootFilesRemoved -eq 12) 'The entry did not preserve retirement options or defaults.'
+    }
+    Run-Test 'The deploy.ps1 entry propagates deployment failures' {
+        $script:mock.FailUpload = 'worker.js'
+        Expect-Failure { & $deploymentEntry @common } 'Azure CLI failed'
+        Assert-Test (-not @($script:calls | Where-Object { (Get-TestArgument $_ '--name') -eq 'sw.js' }).Count) 'The entry continued after a failure.'
     }
     Run-Test 'Exact allowlist, MIME, verification, upload order and environment restoration' {
         $result = & $deploymentScript @common

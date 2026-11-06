@@ -1,9 +1,62 @@
+# Local Azure credentials, including environment-specific copies and backups.
+# Keep only the intentionally nonfunctional example in version control.
+access-key*.yaml*
+access-key*.yml*
+!access-key.example.yaml
+
+# Local environment variables and Streamlit secrets, not shared app settings.
+.env
+.env.*
+!.env.example
+!.env.sample
+.streamlit/secrets*.toml
+
+# Private keys and local signing / TLS certificates.
+*.key
+*.pem
+*.pfx
+*.p12
+
+# Python virtual environments, bytecode, and local analysis / coverage caches.
 .venv/
+venv/
 __pycache__/
 *.py[cod]
-.streamlit/secrets.toml
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node dependencies and local package / TypeScript / coverage caches.
 node_modules/
-web/dist/
-web/puzzle-iphone.zip
-access-key.yaml
-access-key.yml
+.npm/
+*.tsbuildinfo
+coverage/
+
+# Reproducible outputs from npm run build; commit their sources instead.
+/web/dist/
+/web/puzzle-iphone.zip
+
+# Put private photo samples and exported puzzle results in these local folders.
+# Do not ignore all PNG / JPEG files: the application includes public icons.
+/local-photos/
+/local-results/
+
+# Runtime logs and editor-generated temporary / backup files.
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+.idea/
+
+# Operating-system metadata.
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Intentionally tracked: package-lock.json, requirements.txt, tsconfig*.json,
+# .streamlit/config.toml, web/public/, tests/, and access-key.example.yaml.
+# These rules do not remove a secret that was already committed.

@@ -1,4 +1,4 @@
-# 拼图定位助手
+# Jigsaw Helper · 拼图定位助手
 
 上传完整参考图、已拼区域（可选）和**一张包含多块散片的合照**，自动分离、编号并显示候选位置，帮助优先找到能接着拼的碎片。无需逐片拍摄。
 
@@ -7,13 +7,73 @@
 - **iPhone / 静态网页版**：OpenCV.js + WebAssembly，不依赖 Python 后端，可添加到主屏幕。
 - **桌面版**：原有 Python / Streamlit，使用 SIFT 和弱纹理候选搜索。
 
-## iPhone：推荐使用静态网页版
+这是一个辅助定位原型，不是保证唯一解的自动拼图求解器。建议先运行内置演示，检查拍摄条件，再使用自己的照片。
+
+## 导航
+
+- [版本与能力](#版本与能力)
+- [目录结构](#目录结构)
+- [iPhone 静态网页版](#iphone-静态网页版)
+- [Azure Storage 部署](#azure-storage-部署)
+- [Python 桌面版](#python-桌面版)
+- [隐私与本地文件](#隐私与本地文件)
+- [开发与验证](#开发与验证)
+- [常见问题](#常见问题)
+- [许可证](#许可证)
+
+## 版本与能力
+
+| 项目 | iPhone / 静态网页版 | Python 桌面版 |
+| --- | --- | --- |
+| 运行方式 | Safari / 支持 WebAssembly 的现代浏览器 | 本机 Python + Streamlit |
+| 是否需要后端 | 不需要；静态网站即可 | 需要启动本机 Streamlit 进程 |
+| 照片输入 | 完整参考图、可选已拼区域、多块散片合照 | 同左 |
+| 图案定位 | ORB，必要时补充 AKAZE，RANSAC 验证 | SIFT + RANSAC |
+| 弱纹理搜索 | 默认开启；24 个角度 × 7 种尺寸，再局部细化 | 可开关；12 个角度 × 5 种尺寸 |
+| 轮廓辅助 | 已拼区域可靠对齐后检查邻接和重叠 | 同左 |
+| 工作图尺寸 | 参考图与照片最长边 1200 像素 | 参考图 1600、照片 1800 像素 |
+| 单张输入限制 | 20 MB、3000 万像素 | 同左 |
+| 散片处理数量 | 最多 5 张合照，默认 30 个区域、上限 50 | 多张合照，默认 40 个区域、上限 100 |
+| 导出 | 当前定位图 PNG、含备选位置的 JSON | 定位图 PNG、候选坐标 JSON |
+| 离线使用 | HTTPS 首次缓存完成后支持 | 依赖安装后可在本机运行 |
+
+内存和照片数量限制用于避免浏览器崩溃，不是省电模式。两版都不自动拆分堆叠碎片，也不保证重复图案存在唯一位置；它们的 JSON 字段并不完全相同。
+
+## 目录结构
+
+| 文件或目录 | 用途 |
+| --- | --- |
+| [web/src/](./web/src/) | 静态版 TypeScript 源码：界面、图片解码、识别线程、算法、类型和演示 |
+| [web/src/matcher.ts](./web/src/matcher.ts) | 背景分离、ORB / AKAZE、模板候选和轮廓评估 |
+| [web/public/](./web/public/) | HTML、CSS、PWA 清单、Service Worker、图标与第三方声明 |
+| [web/retire-root-sw.js](./web/retire-root-sw.js) | 停用旧根目录 PWA 的专用维护脚本，不是应用识别线程 |
+| [build.mjs](./build.mjs) / [serve.mjs](./serve.mjs) | 静态构建、打包和本地预览服务器 |
+| [app.py](./app.py) / [puzzle_helper.py](./puzzle_helper.py) / [demo.py](./demo.py) | 桌面界面、Python 识别实现及演示生成器 |
+| [deploy.ps1](./deploy.ps1) / [deploy-azure.ps1](./deploy-azure.ps1) | 推荐部署入口及其 Azure 实现，使用本机凭据发布 |
+| [web.test.mjs](./web.test.mjs) / [tests/](./tests/) | 静态版、桌面版和部署脚本测试 |
+| [package.json](./package.json) / [package-lock.json](./package-lock.json) | Node 命令和锁定的开发依赖 |
+| [requirements.txt](./requirements.txt) / [.streamlit/config.toml](./.streamlit/config.toml) | Python 依赖和可公开的本地服务设置 |
+| [access-key.example.yaml](./access-key.example.yaml) | 无真实凭据的 Azure 配置模板 |
+| [.gitignore](./.gitignore) | 本地凭据、依赖、生成文件与私人照片目录的排除规则 |
+
+`web\dist`、`web\puzzle-iphone.zip`、`node_modules` 和 `.venv` 都是本地生成内容，不随 Git 仓库发布。刚克隆项目时缺少这些路径是正常的，应按下面的步骤安装和构建。
+
+## iPhone 静态网页版
 
 线上入口：<https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/>。根地址和旧根目录首页已停用，返回 HTTP 404。不带末尾 `/` 的子目录地址会自动规范为这个目录地址，防止相对资源误指向网站根目录。
 
-### 直接使用构建好的安装包
+### 直接打开线上应用
 
-静态文件在 [web/dist](./web/dist)，可分发压缩包为 [puzzle-iphone.zip](./web/puzzle-iphone.zip)。
+1. 在 iPhone **Safari** 打开上面的子目录地址，等待“识别引擎已就绪”。
+2. 点 **试用一张多片散片照片**，不需要提供任何私人图片即可体验四块旋转散片的识别。
+3. 要安装到主屏幕，等待“离线程序已缓存”，再点 Safari 的“分享”→“添加到主屏幕”。
+4. 开始使用自己的图片时，按“完整参考图 → 可选已拼区域 → 散片合照”的顺序选择，点击 **开始寻找位置**。
+
+手机无需安装 Python、Node.js 或 OpenCV。首次联网下载程序和 OpenCV.js 后，计算在手机完成；普通使用不需要电脑保持开机。
+
+### 自行托管构建产物
+
+先按“从源码构建和预览”生成静态文件：目录为 `web\dist`，分发压缩包为 `web\puzzle-iphone.zip`。这些是**构建输出，不是 GitHub 仓库中预先包含的文件**。
 
 1. 解压，将其中**全部文件**部署到同一目录的 **HTTPS 静态网站**，例如 GitHub Pages、Cloudflare Pages 或自己的静态服务器。首页是 `index.html`，不需要 Python、数据库或上传接口，也不需要特殊的跨域隔离响应头。
 2. 在 iPhone **Safari** 打开网站，等待“识别引擎已就绪”。可以先点 **试用一张多片散片照片**，示例的一张照片包含 4 块不同旋转角度的散片。
@@ -32,6 +92,47 @@
 - 自动编号的是**连通区域，不是被遮挡物体的真实数量**。明显偏大的区域会提示“疑似多片相连”，但无法保证检测出所有接触或堆叠。
 - 若几块被同一个轮廓圈住，先摆开重拍；**无法从一张照片恢复堆叠时被遮住的图案和边缘**。不需要逐块拍摄，只需重新平铺。
 
+### 图片要求与设置说明
+
+| 输入或设置 | 如何准备 / 调整 |
+| --- | --- |
+| 完整参考图，必选 | 使用拼图正面完整图案，裁掉盒子边框；不要镜像或过度改变颜色 |
+| 已拼区域，可选 | 正上方拍摄，周围露出纯色桌面；无法可靠对齐时会明确停用轮廓检查 |
+| 散片合照，必选 | 平铺且不接触，四周留出背景；JPEG、PNG、WebP 最通用 |
+| 透明 PNG | 使用 alpha 通道分离碎片；无需依赖桌面颜色 |
+| 背景颜色，默认自动 | 自动采样照片边缘；若采样到手、盒子或阴影，请重新裁剪 / 拍摄或选择匹配的背景选项 |
+| 背景分离容差，默认 32 | 分割结果不正确时调整，先检查“散片合照编号”，不要仅看最后定位图 |
+| 最小面积，默认 0.2% | 提高可过滤小杂点，降低可保留较小碎片；太低会把噪声当成碎片 |
+| 最多处理数量，默认 30 | 是整个分析批次的上限，不是每张合照的上限 |
+| 横向片数，默认 10 | 估计完整拼图一行有多少块，不是整幅拼图总片数；主要影响弱纹理搜索的尺寸范围 |
+| 弱纹理候选搜索，默认开启 | 对特征不足的散片做更充分的角度与尺寸搜索；可能较久，可随时取消 |
+
+白色碎片不要放在白色桌面上；深色碎片同理。反光、强阴影、模糊和严重透视通常比参数设置更影响结果。不要为了挤进一张照片而拍得过远，让每块保留足够细节。
+
+### 如何核对结果与导出
+
+- **先找编号，再找位置**：合照中的 `1-01` 表示第 1 张照片中的一个检测区域，不是拼图原厂编号。
+- **绿色轮廓**：有较可靠的图案特征支持，但不是唯一解的证明；**橙色**为待核对候选；**红色**表示与已拼区域明显重叠。绿色半透明区域是已对齐的已拼区域。
+- 点击散片卡片只看这一块；若有多个候选，会出现选择框。点击 **查看全部** 恢复默认候选总览。
+- 没有候选的碎片仍保留编号和缩略图。邻接轮廓分为空时，表示没有可比较的邻边，不应理解为“形状不匹配”。
+- PNG 导出当前显示的定位图；JSON 保留各片的默认候选及 `alternatives`，切换界面候选不会把默认候选改写成确定答案。
+
+静态版 JSON 的主要字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `reference_size` | 分析所用参考图的宽高，坐标原点为左上角；不是原上传图尺寸 |
+| `coordinate_system` | `resized_reference_pixels, origin=top_left` |
+| `scores_are_probabilities` | 始终为 `false`；分数不能解释为正确率 |
+| `pieces[].id` / `source` | 散片编号和来源照片文件名 |
+| `pieces[].suspected_joined` | 检测区域是否疑似由多块相连组成，不保证发现所有堆叠 |
+| `candidate` / `alternatives` | 默认候选和备选数组；没有候选时为 `null` / 空数组 |
+| 候选的 `method` / `model` | `orb`、`akaze` 或 `template`；以及对应的透视、旋转缩放或模板模型 |
+| 候选的 `center` / `polygon` / `outline` | 在工作参考图上的中心、四角和轮廓点，点格式为 `[x, y]` |
+| 候选的 `transform` | 行优先的 9 个数，组成把碎片裁剪图坐标映射到工作参考图的 3 × 3 矩阵 |
+| 候选的 `reliable` / `inliers` | 几何特征支持及内点数；模板搜索不会标为可靠特征匹配 |
+| 候选的 `overlap` / `contact` / `edgeScore` | 已拼区域重叠、邻接接触和边缘辅助分；缺少对应证据时可能为 `null` |
+
 ### 与桌面版的区别
 
 手机端以**识别效果优先，不按耗电限制计算**。在 Web Worker 中先做 ORB + Hamming 匹配，无法可靠定位时补充 AKAZE 特征；RANSAC 继续验证旋转缩放和透视模型。已拼区域成功对齐后仍检查邻接轮廓和重叠，保留缺片空洞。
@@ -44,15 +145,17 @@
 
 ### 从源码构建和预览
 
-开发机需要 Node.js 22.18 或更新版本，iPhone 不需要安装 Node.js：
+开发机需要 Git、Node.js **22.18 或更新版本**及 npm；只运行静态版不需要安装 Python、Azure CLI 或提供存储密钥。以下命令使用 Windows PowerShell：
 
 ```powershell
+git clone https://github.com/chegon/jigsaw-helper.git
+Set-Location .\jigsaw-helper
 npm ci
 npm run build
 npm run preview
 ```
 
-电脑打开 <http://127.0.0.1:8080>。构建会进行 TypeScript 检查，生成 `web\dist` 和 `web\puzzle-iphone.zip`，压缩包仅含可部署的静态文件及开源许可。
+已经克隆过时，从项目目录执行后三条命令即可。电脑打开 <http://127.0.0.1:8080>，终端按 `Ctrl+C` 停止预览。`npm ci` 按提交的锁文件还原依赖，`npm run build` 会检查主线程及 Worker 的 TypeScript，再打包可部署资源和开源许可；预览服务器不会自动重新构建，修改源码后需要再次构建并刷新页面。
 
 同一 Wi-Fi 下临时用 iPhone 试用：
 
@@ -70,15 +173,25 @@ npm test
 
 自动测试使用生成图像验证一张合照中的 4 块旋转碎片、透视误差、轮廓互补、缺片空洞、异常和数量限制。浏览器测试不能代替 iPhone 真机的性能、HEIC 和系统分享面板测试。
 
-### 部署到 Azure Storage / ADLS Gen2
+### Azure Storage 部署
 
-使用 [deploy-azure.ps1](./deploy-azure.ps1)，支持 Windows PowerShell 5.1 / PowerShell 7。部署目标是现有的标准 GPv2 存储账户；启用分层命名空间的 ADLS Gen2 也支持静态网站。需要安装 Azure CLI，使用连接字符串认证，不需要先 `az login`：
+推荐从项目根目录运行 [deploy.ps1](./deploy.ps1)，支持 Windows PowerShell 5.1 / PowerShell 7。它将所有参数、预览及确认行为转交给 [deploy-azure.ps1](./deploy-azure.ps1)，不会维护另一套上传逻辑；原脚本仍可直接使用。
+
+部署目标是**已经存在**的标准 GPv2 存储账户；启用分层命名空间的 ADLS Gen2 也支持静态网站。脚本不创建订阅、资源组或存储账户。需要 Azure CLI 和本机完整连接字符串，不需要先 `az login`：
 
 ```powershell
 winget install --id Microsoft.AzureCLI -e
 ```
 
-将 Azure Portal 中的账户名称和**完整连接字符串**放到项目根目录的 `access-key.yaml`，沿用这两个字段（值替换为自己的，不要分享此文件）：
+先准备静态构建，再从模板创建本机配置。下面的保护条件不会覆盖已有凭据：
+
+```powershell
+if (-not (Test-Path -LiteralPath .\access-key.yaml)) {
+    Copy-Item -LiteralPath .\access-key.example.yaml -Destination .\access-key.yaml
+}
+```
+
+在本机编辑 `access-key.yaml`，将 Azure Portal → 存储账户 → **Access keys** 中的账户名称和**完整连接字符串**填入两个字段；下面只有占位符，不能直接用来部署：
 
 ```yaml
 Storage account name: YOUR_STORAGE_ACCOUNT
@@ -87,21 +200,23 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 
 支持这些平铺字段及其 `AccountName` / `ConnectionString` 写法，不需要额外 YAML 模块。连接字符串必须使用 HTTPS，包含一致的 `AccountName` 和 `AccountKey`，以及标准 Azure 的 `EndpointSuffix`；不接受 SAS、自定义代理地址或模拟器连接字符串。
 
+可用的 `EndpointSuffix` 为 `core.windows.net`、`core.usgovcloudapi.net` 或 `core.chinacloudapi.cn`。不要将密钥放到脚本参数、环境示例、公开 Issue 或截图中；也不要把 `.yaml` 配置当作网站资源上传。
+
 ```powershell
 # 先检查配置、静态文件和部署计划；不联网、不构建、不修改 Azure
-.\deploy-azure.ps1 -WhatIf
+.\deploy.ps1 -WhatIf
 
 # 重新构建并部署，默认上传到 $web/jigsaw-helper/
-.\deploy-azure.ps1 -Build
+.\deploy.ps1 -Build
 
 # 或直接上传已有构建；提供 Portal 中的 Primary endpoint 可同时验证公开网站
-.\deploy-azure.ps1 -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy.ps1 -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
 
 # 自定义子目录；也支持 tools/jigsaw-helper 这样的多级路径
-.\deploy-azure.ps1 -Prefix 'jigsaw-helper' -Build -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy.ps1 -Prefix 'jigsaw-helper' -Build -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
 
 # 仅在明确需要覆盖网站根目录时使用
-.\deploy-azure.ps1 -Prefix '' -Build
+.\deploy.ps1 -Prefix '' -Build
 ```
 
 默认部署地址是 `Primary endpoint + jigsaw-helper/`。`-WebsiteUrl` 可以填 Primary endpoint 根地址，也可以填与 `-Prefix` 一致的目录地址，脚本会规范为带末尾 `/` 的应用地址，不会重复追加路径。若之前从网站根目录添加了主屏幕图标，请从新的子目录地址重新“添加到主屏幕”；新的安装入口和离线缓存只作用于这个子目录，原根目录副本不会被删除。
@@ -111,7 +226,7 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 要停用先前发布的根目录版本，让 `/` 和 `/index.html` 返回 **HTTP 404**，可显式运行：
 
 ```powershell
-.\deploy-azure.ps1 -RetireRoot -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy.ps1 -RetireRoot -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
 ```
 
 此选项会先发布并验证子目录，再删除固定清单中的 12 个旧根目录应用文件，使用 ETag 避免误删并发更新的内容，不删除整个容器、其他文件或目录。需要非空 `-Prefix` 和 `-WebsiteUrl`；已有账户级首页回退配置时会停止，不会擅自修改它。
@@ -122,6 +237,16 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 
 还可以通过 `-CredentialPath` 和 `-SourcePath` 指定其他配置和构建目录。`-Build` 需要已安装 Node.js 和项目依赖；先运行 `npm ci`。如果 PowerShell 执行策略阻止脚本，可在当前窗口临时执行 `Set-ExecutionPolicy -Scope Process Bypass`，不要更改计算机全局策略。
 
+| 参数 | 默认值 / 作用 |
+| --- | --- |
+| `-CredentialPath` | 脚本所在目录的 `access-key.yaml`，只在本机读取 |
+| `-SourcePath` | `web\dist`，必须已有完整静态构建 |
+| `-Prefix` | `jigsaw-helper`，可设多级目录；空字符串表示网站根目录 |
+| `-Build` | 上传前运行 `npm run build`；不自动安装依赖 |
+| `-WebsiteUrl` | Portal 显示的 HTTPS Primary endpoint，或匹配前缀的完整应用目录 |
+| `-WhatIf` | 验证配置和文件并显示计划，不构建、不联网、不改变 Azure |
+| `-RetireRoot` | 显式清理旧根目录应用；先确认那 12 个同名文件不是其他网站的内容 |
+
 脚本会：
 
 - 启用静态网站，索引文档设为 `index.html`，保留已有自定义 404 文档；确保 `$web` 容器存在。
@@ -129,6 +254,10 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 - 设置正确 MIME、`Cache-Control: no-cache`，启用传输内容校验，并逐个核对远端文件长度及 MIME / 缓存头。
 - 先上传运行资源，再上传首页，**最后上传 Service Worker**，减少新版离线缓存引用到未上传资源的机会。部署不是原子切换，更新期间可能短暂出现混合版本；iPhone 关闭旧页面后重新打开以完成离线更新。
 - 只在本次脚本进程的临时环境变量中提供连接字符串，不把密钥放到命令行、网页或输出中；无论成功或失败都会恢复原有环境变量。
+
+公开资源的关键 MIME 为：HTML `text/html`、JavaScript（包括 `sw.js` 和 `opencv.js`）`application/javascript`、PWA 清单 `application/manifest+json`。使用脚本上传时会自动设置；手动上传时也必须正确，否则浏览器可能拒绝执行脚本或注册 Service Worker。
+
+正常更新继续运行相同部署命令即可，不需要再次使用 `-RetireRoot`。GitHub 提交 / 推送和 Azure 发布是两件事；本仓库没有配置自动发布流水线，修改源码后需要自行构建并执行部署脚本。
 
 `access-key.yaml` / `access-key.yml` 已加入忽略列表。不要提交、分享或放入网站，密钥泄露后应在 Azure 轮换。账户若禁用了 Shared Key 认证或网络访问被防火墙阻止，脚本会明确失败，不会调整这些安全策略。静态网站公开只读，照片始终在 iPhone 本地处理。
 
@@ -140,7 +269,7 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 .\tests\Test-DeployAzure.ps1
 ```
 
-## 桌面版：Windows 启动
+## Python 桌面版
 
 需要 Python 3.11 或更新版本。Windows 上推荐使用 `py` 启动器：
 
@@ -154,7 +283,7 @@ py -m venv .venv
 
 首次可以直接勾选 **使用内置演示图片**，再点击 **开始分析**。
 
-## 拍照与使用
+### 桌面操作流程
 
 1. **完整参考图**：拼图的正面完整图案，尽量裁掉包装盒边框。
 2. **已拼区域，可选**：在纯色背景上拍摄，周围露出桌面。程序成功对齐后才启用邻接轮廓和重叠检查。
@@ -164,7 +293,7 @@ py -m venv .venv
 
 尽量垂直拍摄、避免反光，参考图和实物保持相近色彩。推荐使用与碎片颜色反差明显的无纹理背景，而不是白色碎片配白色桌面。调整“背景分离容差”和“单片最小面积”可改善分割。每张文件最多 20 MB、3000 万像素，参考图与照片默认分别缩小到最长边 1600 / 1800 像素，默认最多处理 40 块。
 
-## 桌面版算法与可信度
+### 桌面算法与可信度
 
 - **分离碎片**：采样照片边缘估计背景色，在 Lab 色彩空间分离背景，再提取连通轮廓；透明 PNG 使用 alpha 遮罩。
 - **图案定位**：SIFT 特征 + Lowe 比率检验 + RANSAC，估计旋转、缩放和透视变换，并验证内点数量、空间覆盖和投影范围。
@@ -186,7 +315,59 @@ py -m venv .venv
 - 特征定位可处理任意旋转及一定程度的透视；弱纹理搜索只按 30° 步进，比较慢且不支持透视。
 - 本版不做全局约束求解，多块候选之间可能冲突，需要逐片核对。
 
-## 验证
+## 隐私与本地文件
+
+### 图片和缓存
+
+- 静态版使用浏览器解码、Canvas 和 Worker 处理选择的图片，没有照片上传 API；选片只是授权网页读取本机文件。
+- Service Worker 缓存的是程序资源和图标，不持久保存用户照片、编号图或结果。关闭 / 刷新页面后要重新选择照片，想保留结果请主动导出。
+- 静态托管服务仍会收到页面、脚本等资源请求，可能按服务配置记录访问日志；“照片不上传”不等于网站完全没有网络请求。
+- 桌面版只应监听本机。即使连接字符串有存储写入权限，也不会被发送到 iPhone 或打包进静态资源。
+- 离线缓存不是备份，可能被 iOS 清理。更新后请关闭所有该站点标签页和主屏幕实例，再联网重新打开；单纯刷新仍可能继续使用旧 Worker。
+
+### 忽略规则与密钥保护
+
+[.gitignore](./.gitignore) 按用途分类，并在规则旁解释原因：
+
+| 类别 | 示例 | 原因 |
+| --- | --- | --- |
+| 本机凭据及备份 | `access-key.yaml`、`access-key.prod.yml`、`access-key.yaml.bak` | 防止真实连接字符串和账户密钥进入仓库；仅放行无密钥模板 |
+| 环境与私有证书 | `.env`、`.streamlit/secrets.toml`、`*.pem`、`*.pfx` | 防止其他本地工具的凭据或私钥被顺带提交 |
+| Python 本地环境 | `.venv`、`venv`、`__pycache__`、类型检查与覆盖率缓存 | 由依赖和测试重新生成 |
+| Node 本地环境 | `node_modules`、`.npm`、覆盖率与 TypeScript 缓存 | 按锁文件重新安装，不把整套依赖提交 |
+| 静态构建产物 | `web\dist`、`web\puzzle-iphone.zip` | 由源码构建，不维护另一份易过期的生成文件 |
+| 私人照片与结果 | `local-photos`、`local-results` | 本地手工试验使用；合成测试图由测试代码生成 |
+| 系统 / 编辑器文件 | 日志、临时备份、`.DS_Store`、`Thumbs.db` | 与可复现运行无关 |
+
+这些规则**不会忽略所有 PNG / JPEG**，因为仓库需要公开图标和可能的非私人素材；不要随意把真实照片放进其他源码目录。规则也不会自动让程序读取 `.env` 或证书。
+
+应保留在版本控制中的是：`package-lock.json`、`requirements.txt`、TypeScript 配置、`.streamlit/config.toml`、源码、测试、第三方声明、许可证及 `access-key.example.yaml`。模板必须始终只有占位符，不要在模板里填真实密钥。
+
+提交前可检查：
+
+```powershell
+# 第一条应显示命中的忽略规则，第二条应没有任何输出
+git check-ignore -v -- access-key.yaml
+git ls-files -- access-key.yaml access-key.yml
+
+# 只查看暂存文件名，确认没有照片、结果、凭据或生成目录
+git diff --cached --name-only
+git status --short
+```
+
+**`.gitignore` 不是密钥扫描器，也不会删除已经提交的文件或历史。** 如果曾经把真实密钥推送到任何仓库，优先到 Azure 轮换密钥；只新增忽略规则、删掉最新文件或把仓库改成私有都不能撤销泄露。
+
+## 开发与验证
+
+静态版与桌面版的算法实现相互独立：修改一个版本不会自动更新另一个。改动识别逻辑时，至少覆盖对应版本的回归测试；只调整 Markdown 文档时无需重新部署应用。
+
+```powershell
+# 静态版：先检查 TypeScript 并构建，再运行 Node 测试
+npm test
+
+# Azure 脚本：隔离模拟，不读取真实凭据，也不请求 Azure
+.\tests\Test-DeployAzure.ps1
+```
 
 使用标准库 `unittest`，不需要额外测试依赖：
 
@@ -195,3 +376,41 @@ py -m venv .venv
 ```
 
 测试使用程序生成的图像，不依赖私人照片或外部图片服务。
+
+主要覆盖范围包括：
+
+- 一张合照中的多块旋转散片、透视映射、几何异常、无关和空白图片。
+- AKAZE 补充定位、弱纹理搜索、旋转 / 缩放误差、遮罩外背景、纯色和不确定候选。
+- 缺片空洞、互补轮廓、已拼区域对齐失败、跨照片数量限制和资源独立性。
+- PWA 子目录路径、离线资源范围、旧根目录 Worker 退役及静态资源打包。
+- Azure 预览、MIME / 缓存头、凭据输出脱敏、环境变量恢复、前缀隔离和受控删除。
+
+自动测试通过并不等于已在所有 iPhone 上验证。Safari 内存、HEIC 解码、系统分享面板和真实照片的识别表现仍需真机测试。运行匹配测试不会修改线上 Azure 网站；只有显式执行部署脚本才会发布。
+
+## 常见问题
+
+| 现象 | 排查与处理 |
+| --- | --- |
+| 克隆后找不到静态文件或 ZIP | 执行 `npm ci`、`npm run build`；这些输出有意不提交 Git |
+| PowerShell 提示不能执行 `npm.ps1` | 可用 `npm.cmd ci` / `npm.cmd run build`，或按本机策略要求处理；不要为此放宽全局策略 |
+| 本地 8080 端口被占用 | 设置当前窗口 `$env:PORT = '8081'` 后运行预览；不要终止不明来源的进程 |
+| iPhone 不能访问电脑的 127.0.0.1 | 该地址指向手机自己；局域网试用需运行 `npm run preview:lan`，并用电脑局域网 IP、同一 Wi-Fi 和允许的防火墙设置 |
+| 局域网网页能识别，但不能离线 | 普通 HTTP 不提供所需安全上下文；部署 HTTPS 静态网站后再缓存 |
+| “文件”App 打开 HTML 后无法识别 | 不支持 `file:` 运行；需要静态 HTTP 预览或 HTTPS 网站 |
+| HEIC 不能读取，或 48 MP 原图被拒绝 | 从相册导出较小 JPEG，或先裁剪；单图 3000 万像素上限用于内存保护 |
+| 编号比实际碎片少，几块被同一轮廓圈住 | 摆开接触 / 堆叠的散片，并选择反差明显的背景；参数不能还原遮住的图案 |
+| 已拼区域无法对齐 | 检查清晰度、纯色留白、透视和参考图裁切；停用轮廓检查后仍可分析散片图案 |
+| 弱纹理搜索较久 | 正常现象，可取消；填准横向片数，并分批拍摄，避免缩图后每块细节太少 |
+| 模板候选分数很高却不正确 | 分数不是概率；重复或渐变图案可能有多处高分，请切换备选并实际核对 |
+| 线上仍显示旧界面 | 联网关闭所有旧标签页 / 主屏幕实例后重开；必要时清除该站点缓存，但要先导出未保存结果 |
+| Azure 返回 403 | 检查账户是否允许 Shared Key、网络防火墙、连接字符串及账户名；脚本不会自动关闭这些保护 |
+| Azure 子目录返回 404 或脚本无法加载 | 确认上传了完整构建、路径大小写和 MIME 正确，且访问的是 HTTPS `web` Primary endpoint |
+| Azure 根目录返回 404 | 当前部署的预期行为，请使用 `/jigsaw-helper/`；`/sw.js` 只保留旧缓存退役用途 |
+
+报告问题时可附浏览器 / iOS 版本、公开错误信息、参数和不含私人内容的示例。不要附真实连接字符串、访问密钥或含这些内容的终端截图。
+
+## 许可证
+
+项目源码使用 [MIT License](./LICENSE)。OpenCV.js 及其依赖遵循各自的开源许可证，不因本项目的 MIT 许可证而改变。
+
+[第三方声明](./web/public/THIRD-PARTY-NOTICES.txt) 会随构建输出；构建还会复制 OpenCV.js 包的许可证为 `LICENSE-opencv-js.txt`。分发静态目录或 ZIP 时应保留这些声明与许可证，不要只复制 JavaScript 文件。
