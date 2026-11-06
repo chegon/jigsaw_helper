@@ -20,6 +20,7 @@ $script:mock = [pscustomobject]@{
     Calls = $script:calls
     WebCalls = $script:webCalls
     FailUpload = ''
+    ErrorContext = ''
     WrongMetadata = ''
     MalformedJson = $false
     FailWebsite = $false
@@ -84,7 +85,7 @@ function az {
         }
         if ($name -eq $state.FailUpload) {
             $global:LASTEXITCODE = 1
-            return "Simulated CLI failure with $($state.Connection) and standalone key $($state.Key)"
+            return "Simulated CLI failure with $($state.Connection) and standalone key $($state.Key). $($state.ErrorContext)"
         }
         Assert-Test ((Get-TestArgument $arguments '--overwrite') -eq 'true') 'Overwrite flag missing.'
         Assert-Test ($arguments -contains '--validate-content') 'Transport validation missing.'
@@ -165,6 +166,7 @@ function Reset-Mocks {
     $script:calls.Clear()
     $script:webCalls.Clear()
     $script:mock.FailUpload = ''
+    $script:mock.ErrorContext = ''
     $script:mock.WrongMetadata = ''
     $script:mock.MalformedJson = $false
     $script:mock.FailWebsite = $false
@@ -185,7 +187,7 @@ function Write-Credentials {
 }
 
 function Expect-Failure {
-    param([scriptblock] $Action, [string] $Expected)
+    param([scriptblock] $Action, [string] $Expected, [string[]] $PrivateValues = @())
     $failed = $false
     try { & $Action | Out-Null }
     catch {
@@ -194,6 +196,9 @@ function Expect-Failure {
         Assert-Test ($message -like "*$Expected*") "Failure did not contain expected explanation: $Expected"
         Assert-Test (-not $message.Contains($script:key)) 'Failure message exposed a key.'
         Assert-Test (-not $message.Contains($script:connection)) 'Failure message exposed a connection string.'
+        foreach ($value in $PrivateValues) {
+            Assert-Test ($message -notmatch [regex]::Escape($value)) 'Failure message exposed a private infrastructure identifier.'
+        }
     }
     Assert-Test $failed 'Operation should have failed.'
 }
@@ -252,6 +257,74 @@ try {
         $script:mock.FailUpload = 'worker.js'
         Expect-Failure { & $deploymentEntry @common } 'Azure CLI failed'
         Assert-Test (-not @($script:calls | Where-Object { (Get-TestArgument $_ '--name') -eq 'sw.js' }).Count) 'The entry continued after a failure.'
+    }
+    Run-Test 'The local Website URL is used automatically through the deploy.ps1 entry' {
+        $parameters = $common.Clone()
+        $parameters.Remove('Prefix')
+        $site = 'https://testjigsaw123.z1.web.core.windows.net/jigsaw-helper/'
+        Write-Credentials "Storage account name: testjigsaw123`nConnection string: `"$script:connection`"`nWebsite URL: `"$site`""
+        $result = & $deploymentEntry @parameters
+        Assert-Test ($result.WebsiteVerified -and $result.WebsiteUrl -eq $site) 'The local final URL was not used.'
+        Assert-Test ($script:webCalls.Count -eq 13) 'The configured public site was not verified.'
+        Assert-Test (@($script:webCalls | Where-Object { -not $_.StartsWith($site) }).Count -eq 0) 'Website checks did not use the private configured URL.'
+    }
+    Run-Test 'Website URL aliases and a Primary endpoint are normalized for the chosen prefix' {
+        $parameters = $common.Clone()
+        $parameters.Prefix = 'tools/jigsaw-helper'
+        Write-Credentials "AccountName: testjigsaw123`nConnectionString: $script:connection`nWebsite_URL: 'https://testjigsaw123.z1.web.core.windows.net/' # placeholder test endpoint"
+        $result = & $deploymentScript @parameters
+        Assert-Test ($result.WebsiteUrl -eq 'https://testjigsaw123.z1.web.core.windows.net/tools/jigsaw-helper/') 'Configured URL alias or prefix normalization failed.'
+        Assert-Test ($result.WebsiteVerified) 'Configured Primary endpoint was not verified.'
+    }
+    Run-Test 'An explicit WebsiteUrl overrides the private configured final URL' {
+        Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: https://private.example.test/jigsaw-helper/"
+        $result = & $deploymentEntry @common -WebsiteUrl 'https://testjigsaw123.z1.web.core.windows.net/'
+        Assert-Test ($result.WebsiteUrl -eq 'https://testjigsaw123.z1.web.core.windows.net/') 'Explicit URL did not override the local config.'
+        Assert-Test (@($script:webCalls | Where-Object { $_ -like '*private.example.test*' }).Count -eq 0) 'The overridden private URL was still requested.'
+    }
+    Run-Test 'A configured URL is sufficient for explicit root retirement' {
+        $parameters = $common.Clone()
+        $parameters.Remove('Prefix')
+        Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: https://testjigsaw123.z1.web.core.windows.net/jigsaw-helper/"
+        $result = & $deploymentEntry @parameters -RetireRoot
+        Assert-Test ($result.RootRetired -and $result.RootFilesRemoved -eq 12 -and $result.WebsiteVerified) 'Root retirement did not accept the private configured URL.'
+    }
+    Run-Test 'Configured Website URL is validated even during WhatIf without displaying its value' {
+        $parameters = $common.Clone()
+        $parameters.Remove('Prefix')
+        foreach ($site in @(
+            'not-an-absolute-URL',
+            'http://private.example.test/jigsaw-helper/',
+            'https://user:password@private.example.test/jigsaw-helper/',
+            'https://private.example.test/jigsaw-helper/?sig=anything',
+            'https://private.example.test/jigsaw-helper/#section',
+            'https://private.example.test/other/'
+        )) {
+            Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: `"$site`""
+            Expect-Failure { & $deploymentEntry @parameters -WhatIf } 'Website' @($site)
+        }
+        Assert-Test ($script:calls.Count -eq 0 -and $script:webCalls.Count -eq 0) 'An invalid private URL caused network activity.'
+    }
+    Run-Test 'Duplicate Website URL aliases are rejected locally' {
+        Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: https://first.example.test/`nWebsiteUrl: https://second.example.test/"
+        Expect-Failure { & $deploymentEntry @common } 'Duplicate credential'
+        Assert-Test ($script:calls.Count -eq 0) 'Duplicate private URLs reached Azure.'
+    }
+    Run-Test 'A configured URL in WhatIf performs no CLI calls or website requests' {
+        $parameters = $common.Clone()
+        $parameters.Remove('Prefix')
+        Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: https://private.example.test/jigsaw-helper/"
+        & $deploymentEntry @parameters -WhatIf | Out-Null
+        Assert-Test ($script:calls.Count -eq 0 -and $script:webCalls.Count -eq 0) 'Private-config preview caused network activity.'
+    }
+    Run-Test 'CLI failures redact the real configured account name and final URL as well as keys' {
+        $parameters = $common.Clone()
+        $parameters.Remove('Prefix')
+        $site = 'https://private.example.test/jigsaw-helper/'
+        Write-Credentials "Storage account name: testjigsaw123`nConnection string: $script:connection`nWebsite URL: $site"
+        $script:mock.FailUpload = 'jigsaw-helper/worker.js'
+        $script:mock.ErrorContext = 'Account TESTJIGSAW123 and URL ' + $site.ToUpperInvariant()
+        Expect-Failure { & $deploymentEntry @parameters } 'Azure CLI failed' @('testjigsaw123', $site)
     }
     Run-Test 'Exact allowlist, MIME, verification, upload order and environment restoration' {
         $result = & $deploymentScript @common

@@ -60,11 +60,11 @@
 
 ## iPhone 静态网页版
 
-线上入口：<https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/>。根地址和旧根目录首页已停用，返回 HTTP 404。不带末尾 `/` 的子目录地址会自动规范为这个目录地址，防止相对资源误指向网站根目录。
+仓库不包含真实存储账户名或线上入口。请在部署者本机被忽略的 `access-key.yaml` 中读取最终的 `Website URL`，不要把实际域名填写到 README、源码或公开 Issue 中。不带末尾 `/` 的子目录地址会自动规范为目录地址，防止相对资源误指向网站根目录。
 
 ### 直接打开线上应用
 
-1. 在 iPhone **Safari** 打开上面的子目录地址，等待“识别引擎已就绪”。
+1. 在 iPhone **Safari** 打开本机配置中的最终 `Website URL`，等待“识别引擎已就绪”。
 2. 点 **试用一张多片散片照片**，不需要提供任何私人图片即可体验四块旋转散片的识别。
 3. 要安装到主屏幕，等待“离线程序已缓存”，再点 Safari 的“分享”→“添加到主屏幕”。
 4. 开始使用自己的图片时，按“完整参考图 → 可选已拼区域 → 散片合照”的顺序选择，点击 **开始寻找位置**。
@@ -191,14 +191,15 @@ if (-not (Test-Path -LiteralPath .\access-key.yaml)) {
 }
 ```
 
-在本机编辑 `access-key.yaml`，将 Azure Portal → 存储账户 → **Access keys** 中的账户名称和**完整连接字符串**填入两个字段；下面只有占位符，不能直接用来部署：
+在本机编辑 `access-key.yaml`，填入 **Access keys** 中的账户名称、完整连接字符串，以及 **Static website** 页面所示 HTTPS 地址对应的最终应用 URL。真实账户名、连接字符串和最终 URL 都只保存在这个被忽略的本机文件中；下面只有占位符，不能直接用来部署：
 
 ```yaml
 Storage account name: YOUR_STORAGE_ACCOUNT
 Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
+Website URL: "https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/"
 ```
 
-支持这些平铺字段及其 `AccountName` / `ConnectionString` 写法，不需要额外 YAML 模块。连接字符串必须使用 HTTPS，包含一致的 `AccountName` 和 `AccountKey`，以及标准 Azure 的 `EndpointSuffix`；不接受 SAS、自定义代理地址或模拟器连接字符串。
+支持这些平铺字段及其 `AccountName` / `ConnectionString` / `WebsiteUrl` 写法，不需要额外 YAML 模块。连接字符串必须使用 HTTPS，包含一致的 `AccountName` 和 `AccountKey`，以及标准 Azure 的 `EndpointSuffix`；不接受 SAS、自定义代理地址或模拟器连接字符串。旧的两字段配置仍可用，但只有填入 `Website URL` 或显式指定覆盖参数后才会验证公开网站。
 
 可用的 `EndpointSuffix` 为 `core.windows.net`、`core.usgovcloudapi.net` 或 `core.chinacloudapi.cn`。不要将密钥放到脚本参数、环境示例、公开 Issue 或截图中；也不要把 `.yaml` 配置当作网站资源上传。
 
@@ -206,30 +207,30 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 # 先检查配置、静态文件和部署计划；不联网、不构建、不修改 Azure
 .\deploy.ps1 -WhatIf
 
-# 重新构建并部署，默认上传到 $web/jigsaw-helper/
+# 重新构建并部署，默认上传到 $web/jigsaw-helper/，并使用配置里的 URL 验证
 .\deploy.ps1 -Build
 
-# 或直接上传已有构建；提供 Portal 中的 Primary endpoint 可同时验证公开网站
-.\deploy.ps1 -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+# 或直接上传已有构建；不需要再把真实 URL 写进命令或源码
+.\deploy.ps1
 
 # 自定义子目录；也支持 tools/jigsaw-helper 这样的多级路径
-.\deploy.ps1 -Prefix 'jigsaw-helper' -Build -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy.ps1 -Prefix 'jigsaw-helper' -Build
 
 # 仅在明确需要覆盖网站根目录时使用
 .\deploy.ps1 -Prefix '' -Build
 ```
 
-默认部署地址是 `Primary endpoint + jigsaw-helper/`。`-WebsiteUrl` 可以填 Primary endpoint 根地址，也可以填与 `-Prefix` 一致的目录地址，脚本会规范为带末尾 `/` 的应用地址，不会重复追加路径。若之前从网站根目录添加了主屏幕图标，请从新的子目录地址重新“添加到主屏幕”；新的安装入口和离线缓存只作用于这个子目录，原根目录副本不会被删除。
+默认部署地址是 `Primary endpoint + jigsaw-helper/`。优先从本机配置的 `Website URL` 读取，显式传入 `-WebsiteUrl` 时覆盖配置。地址可以是 Primary endpoint 根地址，也可以是与 `-Prefix` 一致的应用目录；脚本会规范为带末尾 `/` 的地址，不会重复追加路径。更换 `-Prefix` 时也要更新本机 URL，或使用根地址以便自动追加前缀。若之前从网站根目录添加了主屏幕图标，请从新的子目录地址重新“添加到主屏幕”；新的安装入口和离线缓存只作用于这个子目录，默认不会删除原根目录副本。
 
 一个账户提供一套静态网站入口和一个 `$web` 容器，但其中可以有多个独立的应用目录，例如 `jigsaw-helper/index.html` 和 `other-tool/index.html`。根目录可以作为导航页，各应用也能直接通过目录 URL 打开。它们共享域名和存储账户，目录不是登录权限、安全边界或费用隔离；需要这些隔离时，应使用不同账户或独立的 Static Web Apps。
 
 要停用先前发布的根目录版本，让 `/` 和 `/index.html` 返回 **HTTP 404**，可显式运行：
 
 ```powershell
-.\deploy.ps1 -RetireRoot -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy.ps1 -RetireRoot
 ```
 
-此选项会先发布并验证子目录，再删除固定清单中的 12 个旧根目录应用文件，使用 ETag 避免误删并发更新的内容，不删除整个容器、其他文件或目录。需要非空 `-Prefix` 和 `-WebsiteUrl`；已有账户级首页回退配置时会停止，不会擅自修改它。
+此选项会先发布并验证子目录，再删除固定清单中的 12 个旧根目录应用文件，使用 ETag 避免误删并发更新的内容，不删除整个容器、其他文件或目录。需要非空 `-Prefix`，以及本机配置或覆盖参数中的网站 URL；已有账户级首页回退配置时会停止，不会擅自修改它。
 
 根目录会保留一个很小的 `/sw.js` **维护脚本**，只用于清理旧版根目录 PWA 的缓存并注销旧 Service Worker，不再提供根目录应用。它不会清除 `/jigsaw-helper/` 的缓存。曾从根目录安装的 iPhone 图标建议删除，再从子目录添加；旧缓存需要联网完成一次更新，无法远程清除一台完全离线设备上的既有内容。
 
@@ -243,7 +244,7 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 | `-SourcePath` | `web\dist`，必须已有完整静态构建 |
 | `-Prefix` | `jigsaw-helper`，可设多级目录；空字符串表示网站根目录 |
 | `-Build` | 上传前运行 `npm run build`；不自动安装依赖 |
-| `-WebsiteUrl` | Portal 显示的 HTTPS Primary endpoint，或匹配前缀的完整应用目录 |
+| `-WebsiteUrl` | 可选覆盖参数；默认读取本机配置的 `Website URL`，不会把实际地址写入源码 |
 | `-WhatIf` | 验证配置和文件并显示计划，不构建、不联网、不改变 Azure |
 | `-RetireRoot` | 显式清理旧根目录应用；先确认那 12 个同名文件不是其他网站的内容 |
 
@@ -261,7 +262,7 @@ Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
 
 `access-key.yaml` / `access-key.yml` 已加入忽略列表。不要提交、分享或放入网站，密钥泄露后应在 Azure 轮换。账户若禁用了 Shared Key 认证或网络访问被防火墙阻止，脚本会明确失败，不会调整这些安全策略。静态网站公开只读，照片始终在 iPhone 本地处理。
 
-不传 `-WebsiteUrl` 时，只验证 Blob 上传结果，不声称已验证公网可访问；静态网站的准确域名需要从 Portal 的 **Static website → Primary endpoint** 复制，不能从访问密钥可靠推断其中的 `zXX`。使用 HTTPS 静态网站地址，不要使用 `dfs` 或 `blob` 地址。
+仅在本机配置与覆盖参数都没有网站 URL 时，脚本只验证 Blob 上传结果，不声称已验证公网可访问。准确域名需要从 Portal 的 **Static website → Primary endpoint** 复制到本机配置，不能从访问密钥可靠推断其中的 `zXX`。使用 HTTPS 静态网站地址，不要使用 `dfs` 或 `blob` 地址。最终地址只在部署者本机终端返回，不写进源码、构建资源或示例模板。
 
 本地模拟测试（不使用真实凭据、不访问 Azure）：
 
@@ -331,7 +332,7 @@ py -m venv .venv
 
 | 类别 | 示例 | 原因 |
 | --- | --- | --- |
-| 本机凭据及备份 | `access-key.yaml`、`access-key.prod.yml`、`access-key.yaml.bak` | 防止真实连接字符串和账户密钥进入仓库；仅放行无密钥模板 |
+| 本机部署信息及备份 | `access-key.yaml`、`access-key.prod.yml`、`access-key.yaml.bak` | 真实账户名、连接字符串和最终网站 URL 均只放在这里；仅放行占位符模板 |
 | 环境与私有证书 | `.env`、`.streamlit/secrets.toml`、`*.pem`、`*.pfx` | 防止其他本地工具的凭据或私钥被顺带提交 |
 | Python 本地环境 | `.venv`、`venv`、`__pycache__`、类型检查与覆盖率缓存 | 由依赖和测试重新生成 |
 | Node 本地环境 | `node_modules`、`.npm`、覆盖率与 TypeScript 缓存 | 按锁文件重新安装，不把整套依赖提交 |
@@ -341,7 +342,7 @@ py -m venv .venv
 
 这些规则**不会忽略所有 PNG / JPEG**，因为仓库需要公开图标和可能的非私人素材；不要随意把真实照片放进其他源码目录。规则也不会自动让程序读取 `.env` 或证书。
 
-应保留在版本控制中的是：`package-lock.json`、`requirements.txt`、TypeScript 配置、`.streamlit/config.toml`、源码、测试、第三方声明、许可证及 `access-key.example.yaml`。模板必须始终只有占位符，不要在模板里填真实密钥。
+应保留在版本控制中的是：`package-lock.json`、`requirements.txt`、TypeScript 配置、`.streamlit/config.toml`、源码、测试、第三方声明、许可证及 `access-key.example.yaml`。模板必须始终只有占位符，不要在模板里填真实账户、连接字符串或 URL。`.gitignore` 无法阻止把这些内容手动复制进 README；提交前还需检查文件内容和历史，不能只检查凭据文件名。
 
 提交前可检查：
 
@@ -356,6 +357,8 @@ git status --short
 ```
 
 **`.gitignore` 不是密钥扫描器，也不会删除已经提交的文件或历史。** 如果曾经把真实密钥推送到任何仓库，优先到 Azure 轮换密钥；只新增忽略规则、删掉最新文件或把仓库改成私有都不能撤销泄露。
+
+删除远端仓库或更换 `origin` 也不会清理本地旧提交。重建仓库前应确认要推送的分支、标签和历史均不含真实账户名、连接字符串及最终 URL；不要把未清理的旧克隆或旧标签重新推回去。历史清理也无法撤回第三方已保存的公开副本。
 
 ## 开发与验证
 

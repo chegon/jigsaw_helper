@@ -3,16 +3,17 @@
 .SYNOPSIS
 Build and deploy Jigsaw Helper to Azure Storage static website hosting.
 .DESCRIPTION
-Forwards the deployment options to deploy-azure.ps1. Reads access-key.yaml
-locally by default; credentials are never included in the static build.
+Forwards the deployment options to deploy-azure.ps1. Reads the account name,
+connection string, and final Website URL from access-key.yaml locally by
+default; private configuration is never included in the static build.
 .EXAMPLE
 .\deploy.ps1 -WhatIf
 .EXAMPLE
-.\deploy.ps1 -Build -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy.ps1 -Build
 .EXAMPLE
 .\deploy.ps1 -Prefix 'tools/jigsaw-helper' -Build
 .EXAMPLE
-.\deploy.ps1 -RetireRoot -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy.ps1 -RetireRoot
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(

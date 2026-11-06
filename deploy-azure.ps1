@@ -2,6 +2,9 @@
 <#
 .SYNOPSIS
 Deploy the static iPhone application to an existing Azure Storage account.
+.DESCRIPTION
+Reads the account name, connection string, and optional final Website URL from
+the ignored access-key.yaml file. -WebsiteUrl overrides the configured URL.
 .EXAMPLE
 .\deploy-azure.ps1 -WhatIf
 .EXAMPLE
@@ -13,7 +16,7 @@ Deploy the static iPhone application to an existing Azure Storage account.
 .EXAMPLE
 .\deploy-azure.ps1 -Prefix '' -Build
 .EXAMPLE
-.\deploy-azure.ps1 -RetireRoot -WebsiteUrl 'https://ACCOUNT.zXX.web.core.windows.net/'
+.\deploy-azure.ps1 -RetireRoot
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
 param(
@@ -58,7 +61,8 @@ function Read-DeploymentCredentials {
             'storageaccountname' { $field = 'AccountName' }
             'accountname' { $field = 'AccountName' }
             'connectionstring' { $field = 'ConnectionString' }
-            default { throw "Unsupported credential field on line $lineNumber. Expected Storage account name or Connection string." }
+            'websiteurl' { $field = 'WebsiteUrl' }
+            default { throw "Unsupported credential field on line $lineNumber. Expected Storage account name, Connection string, or Website URL." }
         }
         if ($values.ContainsKey($field)) { throw "Duplicate credential field on line $lineNumber." }
         $values[$field] = $value
@@ -105,14 +109,22 @@ function Read-DeploymentCredentials {
         AccountName = $values['AccountName']
         AccountKey = $parts['AccountKey']
         ConnectionString = $values['ConnectionString']
+        WebsiteUrl = if ($values.ContainsKey('WebsiteUrl')) { $values['WebsiteUrl'] } else { $null }
     }
 }
 
 function Protect-DeploymentMessage {
     param([string] $Text)
 
-    $safe = $Text.Replace($script:credentials.ConnectionString, '[REDACTED]')
-    $safe = $safe.Replace($script:credentials.AccountKey, '[REDACTED]')
+    $safe = $Text
+    foreach ($value in @(
+        $script:credentials.ConnectionString, $script:credentials.AccountKey,
+        $script:credentials.WebsiteUrl, $script:credentials.AccountName
+    )) {
+        if ($value) {
+            $safe = [regex]::Replace($safe, [regex]::Escape($value), '[REDACTED]', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        }
+    }
     return ($safe -replace '(?i)(AccountKey|SharedAccessSignature|sig)\s*=\s*[^;\s"'']+', '$1=[REDACTED]')
 }
 
@@ -165,8 +177,16 @@ $blobPrefix = $Prefix.Trim('/')
 if ($blobPrefix -and $blobPrefix -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_-]*(/[A-Za-z0-9][A-Za-z0-9_-]*)*$') {
     throw '-Prefix must contain directory names separated by /, using letters, digits, hyphens, or underscores. Use an empty string for the website root.'
 }
+$script:credentials = Read-DeploymentCredentials -Path $CredentialPath
+if (-not $PSBoundParameters.ContainsKey('WebsiteUrl') -and $script:credentials.WebsiteUrl) {
+    [uri] $configuredUrl = $null
+    if (-not [uri]::TryCreate($script:credentials.WebsiteUrl, [System.UriKind]::Absolute, [ref] $configuredUrl)) {
+        throw 'Configured Website URL is invalid. Its value has not been displayed.'
+    }
+    $WebsiteUrl = $configuredUrl
+}
 if ($RetireRoot -and (-not $blobPrefix -or -not $WebsiteUrl)) {
-    throw '-RetireRoot requires a nonempty -Prefix and -WebsiteUrl so the subdirectory can be verified before root files are removed.'
+    throw '-RetireRoot requires a nonempty -Prefix and Website URL in the local config or -WebsiteUrl so the subdirectory can be verified before root files are removed.'
 }
 $retirementWorker = Join-Path $PSScriptRoot 'web\retire-root-sw.js'
 if ($RetireRoot -and (-not (Test-Path -LiteralPath $retirementWorker -PathType Leaf) -or
@@ -186,8 +206,6 @@ if ($WebsiteUrl) {
     $deploymentPath = if ($blobPrefix) { '/' + $blobPrefix + '/' } else { '/' }
     $deploymentUrl = [uri] ($WebsiteUrl.GetLeftPart([System.UriPartial]::Authority) + $deploymentPath)
 }
-$script:credentials = Read-DeploymentCredentials -Path $CredentialPath
-
 if ($Build) {
     if ($WhatIfPreference) {
         Write-Host 'What if: build the static application with npm run build (not executed).'
@@ -324,7 +342,7 @@ try {
     } else {
         Write-Host 'Assets uploaded and verified in Blob Storage. The public website URL was not checked.'
         Write-Host 'Find Primary endpoint in Azure Portal > Storage account > Static website.'
-        Write-Host 'Optional: pass -WebsiteUrl https://ACCOUNT.zXX.web.core.windows.net/; -Prefix is appended automatically.'
+        Write-Host 'Set Website URL in the ignored access-key.yaml, or pass -WebsiteUrl explicitly; -Prefix is appended automatically.'
     }
 
     $rootFilesRemoved = 0

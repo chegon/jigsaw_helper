@@ -1,4 +1,5 @@
 # Local Azure credentials, including environment-specific copies and backups.
+# Keep real account names, connection strings, and final URLs in access-key.yaml.
 # Keep only the intentionally nonfunctional example in version control.
 access-key*.yaml*
 access-key*.yml*

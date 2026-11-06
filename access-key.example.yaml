@@ -1,6 +1,8 @@
 # Copy this template to access-key.yaml only if that local file does not exist.
-# Replace both placeholders using the Azure Portal account access-keys page.
+# Replace the placeholders using Azure Portal access keys and Static website.
 # Use the full HTTPS connection string with AccountName, AccountKey, and
-# EndpointSuffix. Never put a real credential in this example or commit it.
+# EndpointSuffix. Keep the final HTTPS website URL in the local file too.
+# Never put real infrastructure identifiers or credentials in this example.
 Storage account name: YOUR_STORAGE_ACCOUNT
 Connection string: "YOUR_FULL_HTTPS_CONNECTION_STRING"
+Website URL: "https://ACCOUNT.zXX.web.core.windows.net/jigsaw-helper/"
