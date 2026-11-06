@@ -150,8 +150,8 @@
 开发机需要 Git、Node.js **22.18 或更新版本**及 npm；只运行静态版不需要安装 Python、Azure CLI 或提供存储密钥。以下命令使用 Windows PowerShell：
 
 ```powershell
-git clone https://github.com/chegon/jigsaw-helper.git
-Set-Location .\jigsaw-helper
+git clone https://github.com/chegon/jigsaw_helper.git
+Set-Location .\jigsaw_helper
 npm ci
 npm run build
 npm run preview
