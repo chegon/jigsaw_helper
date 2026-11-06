@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#126d65">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="拼图助手">
+    <meta name="description" content="从一张散片照片自动编号并寻找位置。照片在手机本地处理，不上传。">
+    <script>
+      if (!location.pathname.endsWith("/") && !location.pathname.endsWith("/index.html")) {
+        const canonical = new URL(location.href);
+        canonical.pathname += "/";
+        location.replace(canonical.href);
+      }
+    </script>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png">
+    <link rel="stylesheet" href="./app.css">
+    <script defer src="./app.js"></script>
+    <title>拼图定位助手 · 手机版</title>
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <span class="eyebrow">在手机上，把下一片找出来</span>
+        <h1>拼图定位助手</h1>
+        <p>拍一张散片合照，自动分离、编号，再回到完整图案中找位置。</p>
+        <div class="badges"><span>无需逐片拍摄</span><span>照片不上传</span><span>可添加到主屏幕</span></div>
+      </header>
+
+      <section class="panel engine-panel" aria-label="程序状态">
+        <p id="engine-status" class="status" role="status" data-state="loading">正在加载本地识别引擎……首次需要下载约 11 MB。</p>
+        <p id="offline-status" class="muted small">首次联网加载后，将尝试缓存程序供离线使用；不会缓存你的照片。</p>
+        <button id="retry-engine" type="button" class="secondary" hidden>重新加载识别引擎</button>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><span class="step">1</span><h2>选择照片</h2></div>
+        <p class="muted">从相册选择或拍照。散片可以有很多块，但请平铺、尽量留缝，不要堆叠。</p>
+        <div class="photo-grid">
+          <div class="photo-card">
+            <label for="reference-file">完整参考图 <span class="required">必选</span></label>
+            <p>完整图案，尽量裁掉包装盒边框。</p>
+            <input id="reference-file" type="file" accept="image/*">
+            <div class="file-summary"><span id="reference-name">尚未选择</span><button type="button" data-clear="reference-file" aria-label="清除完整参考图" hidden>清除</button></div>
+          </div>
+          <div class="photo-card">
+            <label for="assembled-file">已拼区域 <span class="optional">可选</span></label>
+            <p>周围露出纯色桌面，用于辅助核对边缘。</p>
+            <input id="assembled-file" type="file" accept="image/*">
+            <div class="file-summary"><span id="assembled-name">尚未选择</span><button type="button" data-clear="assembled-file" aria-label="清除已拼区域" hidden>清除</button></div>
+          </div>
+          <div class="photo-card">
+            <label for="loose-files">散片合照 <span class="required">必选</span></label>
+            <p>一张可以包含多块；最多选择 5 张照片。</p>
+            <input id="loose-files" type="file" accept="image/*" multiple>
+            <div class="file-summary"><span id="loose-name">尚未选择</span><button type="button" data-clear="loose-files" aria-label="清除散片照片" hidden>清除</button></div>
+          </div>
+        </div>
+        <details class="settings">
+          <summary>识别设置与拍照建议</summary>
+          <div class="settings-grid">
+            <label>背景颜色
+              <select id="background"><option value="auto">自动采样照片边缘</option><option value="light">白色背景</option><option value="dark">黑色背景</option></select>
+            </label>
+            <label>背景分离容差
+              <input id="tolerance" type="number" min="5" max="100" step="1" value="32" inputmode="numeric">
+            </label>
+            <label>单片最小面积（占照片 %）
+              <input id="min-area" type="number" min="0.05" max="5" step="0.05" value="0.2" inputmode="decimal">
+            </label>
+            <label>最多处理碎片数
+              <input id="max-pieces" type="number" min="1" max="50" step="1" value="30" inputmode="numeric">
+            </label>
+            <label>整幅拼图横向约有几片
+              <input id="approximate-columns" type="number" min="2" max="100" step="1" value="10" inputmode="numeric" aria-describedby="search-help">
+            </label>
+            <label class="checkbox-setting">
+              <input id="template-fallback" type="checkbox" checked>
+              弱纹理候选搜索（推荐开启）
+            </label>
+          </div>
+          <p id="search-help" class="small muted">识别效果优先：先做特征定位，仍不可靠时搜索多个角度和尺寸。请尽量填准横向片数；候选最多 3 个，可逐个核对。搜索可能较久，可随时取消。</p>
+          <p class="small muted">图片自动缩小到最长边 1200 像素。建议每张拍 10～30 片，使用与图案反差明显的无纹理背景，正上方拍摄并避免反光。若多块被同一个轮廓圈住，请摆开重拍。</p>
+        </details>
+        <div class="actions">
+          <button id="analyze" type="button" disabled>开始寻找位置</button>
+          <button id="demo" type="button" class="secondary" disabled>试用一张多片散片照片</button>
+          <button id="cancel" type="button" class="secondary" hidden>取消分析</button>
+        </div>
+        <div id="progress-area" hidden>
+          <progress id="progress" max="1" value="0" aria-label="分析进度"></progress>
+        </div>
+        <p id="analysis-status" class="muted small" role="status" data-state="idle">照片只在本机内存中处理；关闭页面后需重新选择。</p>
+        <p id="error" class="error" role="alert" hidden></p>
+      </section>
+
+      <section id="results" class="panel" hidden>
+        <div class="section-heading"><span class="step">2</span><h2>对照编号，找到实物</h2></div>
+        <div class="metrics">
+          <div><strong id="piece-count">0</strong><span>检测区域</span></div>
+          <div><strong id="match-count">0</strong><span>有候选位置</span></div>
+          <div><strong id="strong-count">0</strong><span>可靠图案特征</span></div>
+        </div>
+        <ul id="warnings" class="warnings"></ul>
+        <p class="legend"><span class="green">绿：图案支持</span><span class="orange">橙：待核对</span><span class="red">红：已拼重叠</span> · 淡绿色为已拼区域</p>
+        <canvas id="reference-canvas" role="img" aria-label="完整参考图上的候选位置"></canvas>
+        <div class="result-toolbar"><p id="selection" class="small">点击下方编号，只看这块的候选位置。</p><button id="show-all" type="button" class="secondary">查看全部</button></div>
+        <label id="candidate-controls" class="candidate-picker" hidden>候选位置（需要人工核对）
+          <select id="candidate-choice"></select>
+        </label>
+        <div class="actions">
+          <button id="save-image" type="button" class="secondary" disabled>保存 / 分享当前定位图</button>
+          <button id="save-json" type="button" class="secondary" disabled>保存候选坐标 JSON</button>
+        </div>
+        <p id="coordinates" class="small muted"></p>
+        <h3>优先核对这些散片</h3>
+        <div id="piece-list" class="piece-list" aria-label="散片编号与候选"></div>
+        <h3>散片合照编号</h3>
+        <p class="small muted">先按下面的编号找实物。不相连的区域才会自动分开；编号数量不等于照片中真实碎片数。</p>
+        <div id="source-previews"></div>
+      </section>
+
+      <details class="panel help">
+        <summary>在 iPhone 上安装与使用</summary>
+        <ol>
+          <li>通过 <strong>Safari</strong> 打开部署后的 HTTPS 网页。</li>
+          <li>点“分享”→“添加到主屏幕”，以后可像 App 一样打开。</li>
+          <li>等页面提示“离线程序已缓存”后，可断网重新打开。照片每次重新选择，不会上传或持久保存。</li>
+        </ol>
+        <p class="small muted">不能从“文件”App 直接双击 HTML 使用，需要先通过静态网站加载。不需要 Python 服务器、App Store 或 Apple 开发者账号。</p>
+      </details>
+      <details class="panel help">
+        <summary>识别原理与限制</summary>
+        <p>识别效果优先，不以耗电减少计算。先用 ORB，无法可靠定位时补充 AKAZE 特征并做 RANSAC 验证；仍不足时默认开启有遮罩的颜色相关搜索，尝试 24 个角度、7 种尺寸，并对初选结果细化。</p>
+        <p>弱纹理搜索依赖横向片数估计，在最长边 640 像素的参考图上返回最多 3 个候选，始终标为待核对；不能证明重复图案存在唯一答案。完全纯色区域不会强行定位。已拼区域的真实轮廓仍用于辅助核对。</p>
+        <p>当前 OpenCV.js 运行包没有 SIFT，补充使用的是 AKAZE；不是为省电而关闭 SIFT。仍保留照片尺寸、内存和数量保护，避免浏览器崩溃。分数不是正确概率。</p>
+        <p><strong>堆叠、遮挡或相互接触的碎片不能可靠自动拆开。</strong>完整参考图通常没有切割线，也不能凭它推断每块的凹凸形状。纯色、重复图案、反光和模糊照片均需人工核对。</p>
+        <p class="small muted">建议 iOS 17 或更新版本。若 HEIC 无法读取，请在相册导出 JPEG，或将相机格式设为“兼容性最佳”。离线缓存可能被 iOS 清理，清理后需要联网重新加载。</p>
+      </details>
+      <footer>本地处理 · 不上传照片 · <a href="./LICENSE-opencv-js.txt">OpenCV.js 开源许可</a></footer>
+    </main>
+    <noscript><p class="error">此程序需要启用 JavaScript 才能在手机上处理图片。</p></noscript>
+  </body>
+</html>

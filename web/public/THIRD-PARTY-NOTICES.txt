@@ -1,0 +1,12 @@
+This application includes OpenCV.js 4.12.0, distributed by
+@techstark/opencv-js (Apache License 2.0).
+
+OpenCV source and license information:
+https://github.com/opencv/opencv/tree/4.12.0
+https://opencv.org/license/
+
+JavaScript distribution:
+https://github.com/TechStark/opencv-js
+
+The accompanying LICENSE-opencv-js.txt contains the package license.
+The original OpenCV.js distribution is included without modification.
